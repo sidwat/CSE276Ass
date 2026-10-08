@@ -4,6 +4,7 @@
   "service": "ros2",
   "workspaceFolder": "/home/ubuntu/ros2_ws",
   "remoteUser": "ubuntu",
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev ros-jazzy-apriltag-msgs ros-jazzy-apriltag ros-jazzy-camera-ros ros-jazzy-image-proc ros-jazzy-image-transport-plugins ros-jazzy-cv-bridge",
   "forwardPorts": [6080],
   "portsAttributes": {
     "6080": {
