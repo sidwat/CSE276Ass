@@ -1,0 +1,13 @@
+services:
+  ros2:
+    image: ghcr.io/tiryoh/ros2-desktop-vnc:jazzy
+    shm_size: "512m"
+    security_opt:
+      - seccomp:unconfined
+    ports:
+      - "6080:80"
+    volumes:
+      - ../ros2_ws:/home/ubuntu/ros2_ws
+    restart: unless-stopped
+    # no custom command: the image's default entrypoint starts supervisord,
+    # which launches the VNC desktop + noVNC web server (verified working)

@@ -1,0 +1,30 @@
+{
+  "name": "ROS2 Jazzy (RubikPi dev)",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "ros2",
+  "workspaceFolder": "/home/ubuntu/ros2_ws",
+  "remoteUser": "ubuntu",
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "ROS2 Desktop (noVNC)",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-iot.vscode-ros",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-vscode.cpptools"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "remoteEnv": {
+    "ROS_DISTRO": "jazzy"
+  }
+}
