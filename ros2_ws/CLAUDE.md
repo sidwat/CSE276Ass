@@ -61,9 +61,13 @@ Drives the physical robot through a separate, non-ROS motor-controller board ove
   *either* one exits.
 - `teleop_example.py` is a plain Python reference script (no `rclpy`) kept for comparison — it is not
   registered in `setup.py` and is not a ROS node.
-- **Known gap**: `setup.py` declares a `velocity_control` console script entry point, but
-  `robot_control/velocity_control.py` does not exist — building/running that entry point will fail
-  until it's added.
+- `velocity_control.py` is the waypoint follower: it reads `x,y,theta` waypoints (metres, radians,
+  relative to the start pose) and publishes `motor_commands`. There are no wheel encoders, so position
+  is dead-reckoned from the commanded wheel speeds (heading optionally from `imu_data`); the
+  `speed_per_unit`/`wheel_base` calibration in `config/velocity_control.yaml` determines accuracy.
+  The turn-drive-turn control logic lives in the ROS-free `waypoint_controller.py` so it can be unit
+  tested in simulation. `launch/waypoint_launch.py` starts it together with `motor_control`.
+- `config/waypoints.txt` is a symlink to the repo-root `waypoints.txt`.
 
 ### `robot_vision` (ament_cmake)
 

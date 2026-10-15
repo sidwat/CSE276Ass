@@ -11,6 +11,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+  <exec_depend>python3-pynput</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
