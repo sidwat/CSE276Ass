@@ -2,8 +2,8 @@
 velocity_control_node:
   ros__parameters:
     # --- Calibrate these two on the real robot (see README / calibration notes) ---
-    speed_per_unit: 1.0     # m/s of wheel ground speed produced by a motor command of 1.0
-    wheel_base: 0.2         # m, effective track width (measured by spinning in place)
+    speed_per_unit: 1.4     # m/s of wheel ground speed produced by a motor command of 1.0
+    wheel_base: 0.8         # m, effective track width (measured by spinning in place)
 
     use_imu: false          # true: take heading from the IMU instead of dead reckoning
     imu_yaw_sign: 1.0       # set to -1.0 if IMU yaw increases when turning clockwise
@@ -17,9 +17,9 @@ velocity_control_node:
     pos_tolerance: 0.05     # m
     heading_tolerance: 0.05 # rad
     k_v: 1.0
-    k_w: 2.0
-    max_v: 0.15             # m/s
+    k_w: 1.0
+    max_v: 0.56             # m/s
     min_v: 0.05             # m/s
-    max_w: 1.0              # rad/s
+    max_w: 1.4              # rad/s
     min_w: 0.4              # rad/s
     realign_angle: 0.5      # rad
