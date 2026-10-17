@@ -3,15 +3,15 @@ import os
 
 import pytest
 from robot_control.waypoint_controller import (
-    apply_wheel_trim, body_to_wheel_cmds, load_waypoints, WaypointController, wheel_cmds_to_body,
-    wrap_angle)
+    apply_wheel_trim, body_to_wheel_cmds, Gains, load_waypoints, WaypointController,
+    wheel_cmds_to_body, wrap_angle)
 
 WAYPOINTS_FILE = os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.txt')
 
 
-def simulate(waypoints, dt=0.05, max_steps=20000):
+def simulate(waypoints, gains=None, dt=0.05, max_steps=20000):
     """Run the controller against ideal unicycle kinematics; return the pose at each waypoint."""
-    controller = WaypointController(waypoints)
+    controller = WaypointController(waypoints, gains)
     x = y = theta = 0.0
     reached_poses = []
     for _ in range(max_steps):
@@ -33,6 +33,14 @@ def test_assignment_waypoints_are_all_reached():
     for (wx, wy, wt), (x, y, theta) in zip(waypoints, reached_poses):
         assert math.hypot(wx - x, wy - y) < controller.gains.pos_tolerance
         assert abs(wrap_angle(wt - theta)) < controller.gains.heading_tolerance
+
+
+def test_fast_minimum_turn_rate_does_not_oscillate_around_target():
+    # One step at min_w (0.06 rad) is wider than the whole +/-0.01 rad tolerance window
+    gains = Gains(heading_tolerance=0.01, min_w=1.2, max_w=1.4)
+    for target in (0.2, 0.785, -0.785, 1.57, 3.0):
+        controller, reached_poses = simulate([(0.0, 0.0, target)], gains, max_steps=200)
+        assert abs(wrap_angle(target - reached_poses[0][2])) <= 1.2 * 0.05
 
 
 def test_load_waypoints_skips_comments_and_blank_lines(tmp_path):
