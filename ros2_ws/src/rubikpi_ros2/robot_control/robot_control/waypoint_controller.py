@@ -45,6 +45,18 @@ def body_to_wheel_cmds(v, w, speed_per_unit, wheel_base, max_cmd):
     return left, right
 
 
+def apply_wheel_trim(left, right, trim):
+    """
+    Compensate mismatched motors by scaling only the forward part of a wheel command.
+
+    The command is split into a forward part (the average of L and R) and a turning part
+    (half their difference); trim shifts the forward part from the left to the right wheel.
+    Turning in place has no forward part, so it is sent unchanged.
+    """
+    forward = (left + right) / 2.0
+    return left - trim * forward, right + trim * forward
+
+
 def wheel_cmds_to_body(left, right, speed_per_unit, wheel_base):
     """Inverse of body_to_wheel_cmds (without the saturation)."""
     v_left = left * speed_per_unit

@@ -8,7 +8,8 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray
 
 from robot_control.waypoint_controller import (
-    body_to_wheel_cmds, Gains, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
+    apply_wheel_trim, body_to_wheel_cmds, Gains, load_waypoints, WaypointController,
+    wheel_cmds_to_body, wrap_angle)
 
 
 class VelocityControlNode(Node):
@@ -128,8 +129,9 @@ class VelocityControlNode(Node):
         self.v, self.w = wheel_cmds_to_body(left, right, self.speed_per_unit, self.wheel_base)
         # The trim compensates for mismatched motors so the robot actually does what was
         # commanded, so it is applied after (and not included in) the dead reckoning above.
+        left, right = apply_wheel_trim(left, right, self.wheel_trim)
         msg = Float32MultiArray()
-        msg.data = [float(left * (1.0 - self.wheel_trim)), float(right * (1.0 + self.wheel_trim))]
+        msg.data = [float(left), float(right)]
         self.publisher.publish(msg)
 
     def destroy_node(self):

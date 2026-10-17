@@ -3,7 +3,8 @@ import os
 
 import pytest
 from robot_control.waypoint_controller import (
-    body_to_wheel_cmds, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
+    apply_wheel_trim, body_to_wheel_cmds, load_waypoints, WaypointController, wheel_cmds_to_body,
+    wrap_angle)
 
 WAYPOINTS_FILE = os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.txt')
 
@@ -47,3 +48,13 @@ def test_wheel_conversion_round_trips_and_saturates_proportionally():
     left, right = body_to_wheel_cmds(1.0, 2.0, speed_per_unit=1.0, wheel_base=0.2, max_cmd=0.5)
     assert max(abs(left), abs(right)) == pytest.approx(0.5)
     assert right / left == pytest.approx(1.2 / 0.8)  # turning radius preserved
+
+
+def test_wheel_trim_only_changes_forward_motion():
+    # Turning in place is untouched
+    assert apply_wheel_trim(-0.3, 0.3, 0.06) == pytest.approx((-0.3, 0.3))
+    # Driving straight shifts speed from the left wheel to the right
+    assert apply_wheel_trim(0.4, 0.4, 0.06) == pytest.approx((0.376, 0.424))
+    # Driving while steering gets the same correction as driving straight at that forward speed
+    left, right = apply_wheel_trim(0.3, 0.5, 0.06)
+    assert (left - 0.3, right - 0.5) == pytest.approx((0.376 - 0.4, 0.424 - 0.4))
