@@ -67,6 +67,14 @@ Drives the physical robot through a separate, non-ROS motor-controller board ove
   `speed_per_unit`/`wheel_base` calibration in `config/velocity_control.yaml` determines accuracy.
   The turn-drive-turn control logic lives in the ROS-free `waypoint_controller.py` so it can be unit
   tested in simulation. `launch/waypoint_launch.py` starts it together with `motor_control`.
+- `trajectory_control.py` is an alternative to `velocity_control`: at startup it fits a smooth
+  constant-speed path that meets every waypoint position *and heading* exactly (quintic Hermite
+  segments, or a straight line where both headings lie along the chord, optimised in the ROS-free
+  `trajectory_planner.py` against the 1 ft corridor, arena and curvature limits). Each segment is
+  driven forward or in reverse, whichever is feasible; the robot touches zero speed only where the
+  direction changes. The plan is played back open loop. Parameters are in
+  `config/trajectory_control.yaml`, launched by `launch/trajectory_launch.py`; `simulate_trajectory`
+  plots/animates the same plan from the same YAML (needs matplotlib, not used on the robot).
 - `config/waypoints.txt` is a symlink to the repo-root `waypoints.txt`.
 
 ### `robot_vision` (ament_cmake)

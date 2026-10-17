@@ -32,6 +32,8 @@ setup(
             'motor_control = robot_control.motor_control:main',
             'keyboard_control = robot_control.keyboard_control:main',
             'velocity_control = robot_control.velocity_control:main',
+            'trajectory_control = robot_control.trajectory_control:main',
+            'simulate_trajectory = robot_control.simulate_trajectory:main',
         ],
     },
 )
