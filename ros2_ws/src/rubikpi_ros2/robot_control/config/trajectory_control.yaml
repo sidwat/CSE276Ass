@@ -1,0 +1,23 @@
+# Parameters for the smooth-trajectory follower (robot_control/trajectory_control.py).
+# The simulator (ros2 run robot_control simulate_trajectory) reads this same file.
+# Write every number with a decimal point: ROS rejects an int for a float parameter.
+trajectory_control_node:
+  ros__parameters:
+    # --- Calibration: keep in sync with velocity_control.yaml ---
+    speed_per_unit: 1.4     # m/s of wheel ground speed produced by a motor command of 1.0
+    wheel_base: 0.8         # m, effective track width
+    max_wheel_cmd: 0.5      # motor_control clips to +/-0.5 anyway
+
+    # --- Motion profile ---
+    cruise_speed: 0.25      # m/s, constant everywhere except the start/stop ramps
+    ramp_time: 1.5          # s, smooth acceleration from rest and deceleration to rest
+    max_curvature: 4.0      # 1/m (min turn radius 0.25 m); also capped by wheel saturation
+
+    # --- Geometric constraints ---
+    corridor_width: 0.3048  # m (1 ft), max distance from the straight line between waypoints
+    arena_min_x: -0.0668    # m, lower-left corner of the 7 ft arena in the waypoint frame
+    arena_min_y: -0.0668    #    (default: arena centred on the waypoints)
+    arena_size: 2.1336      # m (7 ft)
+
+    control_rate: 20.0      # Hz
+    start_delay: 2.0        # s

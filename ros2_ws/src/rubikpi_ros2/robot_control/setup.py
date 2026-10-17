@@ -33,6 +33,8 @@ setup(
             'keyboard_control = robot_control.keyboard_control:main',
             'velocity_control = robot_control.velocity_control:main',
             'calibrate_motion = robot_control.calibrate_motion:main',
+            'trajectory_control = robot_control.trajectory_control:main',
+            'simulate_trajectory = robot_control.simulate_trajectory:main',
         ],
     },
 )
