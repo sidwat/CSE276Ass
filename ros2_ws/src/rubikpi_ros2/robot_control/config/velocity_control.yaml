@@ -5,6 +5,8 @@ velocity_control_node:
     speed_per_unit: 1.4     # m/s of wheel ground speed produced by a motor command of 1.0
     wheel_base: 0.8         # m, effective track width (measured by spinning in place)
 
+    wheel_trim: 0.0         # >0 if the robot veers right when driving straight, <0 if left
+
     use_imu: false          # true: take heading from the IMU instead of dead reckoning
     imu_yaw_sign: 1.0       # set to -1.0 if IMU yaw increases when turning clockwise
 

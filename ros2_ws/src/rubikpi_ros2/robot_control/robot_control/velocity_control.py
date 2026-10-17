@@ -2,6 +2,7 @@ import math
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray
@@ -26,6 +27,7 @@ class VelocityControlNode(Node):
         self.declare_parameter('speed_per_unit', 1.0)  # m/s of wheel speed per 1.0 of command
         self.declare_parameter('wheel_base', 0.2)      # m, effective track width
         self.declare_parameter('max_wheel_cmd', 0.5)   # motor_control clips to +/-0.5 anyway
+        self.declare_parameter('wheel_trim', 0.0)      # >0 if it veers right going straight
         self.declare_parameter('control_rate', 20.0)   # Hz, must beat the 0.15s motor watchdog
         self.declare_parameter('start_delay', 2.0)     # s, wait for motor_control to come up
         self.declare_parameter('pause_at_waypoint', 1.0)  # s
@@ -45,6 +47,7 @@ class VelocityControlNode(Node):
         self.speed_per_unit = float(self.get_parameter('speed_per_unit').value)
         self.wheel_base = float(self.get_parameter('wheel_base').value)
         self.max_wheel_cmd = float(self.get_parameter('max_wheel_cmd').value)
+        self.wheel_trim = float(self.get_parameter('wheel_trim').value)
         self.pause_at_waypoint = float(self.get_parameter('pause_at_waypoint').value)
         self.use_imu = bool(self.get_parameter('use_imu').value)
         self.imu_yaw_sign = float(self.get_parameter('imu_yaw_sign').value)
@@ -123,8 +126,10 @@ class VelocityControlNode(Node):
             v, w, self.speed_per_unit, self.wheel_base, self.max_wheel_cmd)
         # Dead-reckon from what was actually sent, after saturation
         self.v, self.w = wheel_cmds_to_body(left, right, self.speed_per_unit, self.wheel_base)
+        # The trim compensates for mismatched motors so the robot actually does what was
+        # commanded, so it is applied after (and not included in) the dead reckoning above.
         msg = Float32MultiArray()
-        msg.data = [float(left), float(right)]
+        msg.data = [float(left * (1.0 - self.wheel_trim)), float(right * (1.0 + self.wheel_trim))]
         self.publisher.publish(msg)
 
     def destroy_node(self):
@@ -141,7 +146,7 @@ def main(args=None):
     try:
         while rclpy.ok() and not node.finished:
             rclpy.spin_once(node, timeout_sec=0.1)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
