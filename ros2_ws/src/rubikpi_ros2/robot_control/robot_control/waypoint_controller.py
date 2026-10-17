@@ -45,6 +45,18 @@ def body_to_wheel_cmds(v, w, speed_per_unit, wheel_base, max_cmd):
     return left, right
 
 
+def apply_wheel_trim(left, right, trim):
+    """
+    Compensate mismatched motors by scaling only the forward part of a wheel command.
+
+    The command is split into a forward part (the average of L and R) and a turning part
+    (half their difference); trim shifts the forward part from the left to the right wheel.
+    Turning in place has no forward part, so it is sent unchanged.
+    """
+    forward = (left + right) / 2.0
+    return left - trim * forward, right + trim * forward
+
+
 def wheel_cmds_to_body(left, right, speed_per_unit, wheel_base):
     """Inverse of body_to_wheel_cmds (without the saturation)."""
     v_left = left * speed_per_unit
@@ -82,6 +94,7 @@ class WaypointController:
         self.gains = gains or Gains()
         self.index = 0
         self.phase = self.ROTATE_TO_TARGET
+        self.last_turn_err = None  # heading error on the previous turn-in-place step
 
     @property
     def done(self):
@@ -102,17 +115,17 @@ class WaypointController:
 
             if self.phase == self.ROTATE_TO_TARGET:
                 if dist < g.pos_tolerance:
-                    self.phase = self.ROTATE_TO_HEADING
-                elif abs(bearing_err) < g.heading_tolerance:
-                    self.phase = self.DRIVE
+                    self._set_phase(self.ROTATE_TO_HEADING)
+                elif self._turn_finished(bearing_err):
+                    self._set_phase(self.DRIVE)
                 else:
                     return 0.0, self._turn_rate(bearing_err), None
 
             elif self.phase == self.DRIVE:
                 if dist < g.pos_tolerance:
-                    self.phase = self.ROTATE_TO_HEADING
+                    self._set_phase(self.ROTATE_TO_HEADING)
                 elif abs(bearing_err) > g.realign_angle:
-                    self.phase = self.ROTATE_TO_TARGET
+                    self._set_phase(self.ROTATE_TO_TARGET)
                 else:
                     v = clamp(g.k_v * dist, g.min_v, g.max_v)
                     w = clamp(g.k_w * bearing_err, -g.max_w, g.max_w)
@@ -120,14 +133,30 @@ class WaypointController:
 
             else:  # ROTATE_TO_HEADING
                 heading_err = wrap_angle(goal_theta - theta)
-                if abs(heading_err) < g.heading_tolerance:
+                if self._turn_finished(heading_err):
                     reached = self.index
                     self.index += 1
-                    self.phase = self.ROTATE_TO_TARGET
+                    self._set_phase(self.ROTATE_TO_TARGET)
                     return 0.0, 0.0, reached
                 return 0.0, self._turn_rate(heading_err), None
 
         return 0.0, 0.0, None
+
+    def _set_phase(self, phase):
+        self.phase = phase
+        self.last_turn_err = None
+
+    def _turn_finished(self, err):
+        """
+        Return True once a turn in place is within tolerance or has just passed the target.
+
+        Stopping as soon as the error changes sign keeps a large min_w from overshooting the
+        target, turning back, and overshooting again forever.
+        """
+        crossed_zero = self.last_turn_err is not None and err * self.last_turn_err < 0
+        passed = crossed_zero and abs(err) < math.pi / 2
+        self.last_turn_err = err
+        return abs(err) < self.gains.heading_tolerance or passed
 
     def _turn_rate(self, err):
         g = self.gains

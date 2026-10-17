@@ -17,11 +17,11 @@ velocity_control_node:
 
     # --- Controller gains / limits ---
     pos_tolerance: 0.01     # m
-    heading_tolerance: 0.01 # rad
+    heading_tolerance: 0.05 # rad
     k_v: 1.26
     k_w: 1.26
     max_v: 0.56             # m/s
     min_v: 0.05             # m/s
-    max_w: 1.26             # rad/s
-    min_w: 0.4              # rad/s
+    max_w: 1.5             # rad/s
+    min_w: 1.0              # rad/s
     realign_angle: 0.5      # rad
