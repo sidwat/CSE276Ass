@@ -35,6 +35,8 @@ setup(
             'calibrate_motion = robot_control.calibrate_motion:main',
             'trajectory_control = robot_control.trajectory_control:main',
             'simulate_trajectory = robot_control.simulate_trajectory:main',
+            'run_recorder = robot_control.run_recorder:main',
+            'plot_run = robot_control.run_recorder:plot_main',
         ],
     },
 )

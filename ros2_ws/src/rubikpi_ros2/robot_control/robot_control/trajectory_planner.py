@@ -67,6 +67,7 @@ class PlannerConfig:
     arena_size: float = 2.1336      # m, 7 ft square
     speed_per_unit: float = 1.4     # calibration, same meaning as in velocity_control.yaml
     wheel_base: float = 0.8
+    wheel_trim: float = 0.0         # >0 if it veers right going straight, same as velocity_control
     max_wheel_cmd: float = 0.5
 
     def curvature_limit(self):

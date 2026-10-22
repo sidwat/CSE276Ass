@@ -1,23 +1,38 @@
-# Parameters for the smooth-trajectory follower (robot_control/trajectory_control.py).
-# The simulator (ros2 run robot_control simulate_trajectory) reads this same file.
+# Parameters for robot_control/trajectory_control.py (both modes) and simulate_trajectory.
 # Write every number with a decimal point: ROS rejects an int for a float parameter.
+# Any value here can be overridden on the launch command, e.g. ccw_deg_per_s:=85.0
 trajectory_control_node:
   ros__parameters:
-    # --- Calibration: keep in sync with velocity_control.yaml ---
-    speed_per_unit: 1.4     # m/s of wheel ground speed produced by a motor command of 1.0
-    wheel_base: 0.8         # m, effective track width
-    max_wheel_cmd: 0.5      # motor_control clips to +/-0.5 anyway
+    quintic: false          # false: turn-drive-turn (segment_planner); true: smooth quintic path
 
-    # --- Motion profile ---
+    # --- Shared calibration ---
+    speed_per_unit: 1.20    # m/s per unit command, straight forwards: 0.2 for 3.97 s drove 95 cm
+    wheel_trim: -0.06       # >0 if it veers right when driving straight, <0 if left
+
+    # --- Turn-drive-turn mode (quintic: false) ---
+    drive_cmd: 0.25         # straight-driving command; below ~0.15 the motors are unreliable
+    spin_cmd: 0.3           # turning-in-place command
+    reverse_speed_per_unit: 1.13  # -0.2 for 3.97 s drove 90 cm backwards
+    reverse_trim: -0.06
+    drive_offset: 0.0       # m a straight covers beyond cmd*speed*time (start/stop effects)
+    ccw_deg_per_s: 76.3     # 90 deg in 1.18 s; video of the 06:05 run: 1.08 s gave ~82 deg
+    ccw_offset_deg: 0.0
+    cw_deg_per_s: 54.9      # 90 deg in 1.33 s, 45 deg in 0.51 s; video: 1.23 s gave ~80-85 deg
+    cw_offset_deg: 17.0
+    min_turn_deg: 3.0
+    pause: 1.0              # s standstill between motions
+    allow_reverse: true     # drive a segment backwards when that needs less turning
+
+    # --- Quintic mode (quintic: true) ---
+    wheel_base: 0.72        # m, from a rolling-curve test (L=0.2,R=0.4); in-place spins give ~0.47
+    max_wheel_cmd: 0.5      # motor_control clips to +/-0.5 anyway
     cruise_speed: 0.25      # m/s, constant everywhere except the start/stop ramps
     ramp_time: 1.5          # s, smooth acceleration from rest and deceleration to rest
     max_curvature: 4.0      # 1/m (min turn radius 0.25 m); also capped by wheel saturation
-
-    # --- Geometric constraints ---
     corridor_width: 0.3048  # m (1 ft), max distance from the straight line between waypoints
     arena_min_x: -0.0668    # m, lower-left corner of the 7 ft arena in the waypoint frame
     arena_min_y: -0.0668    #    (default: arena centred on the waypoints)
     arena_size: 2.1336      # m (7 ft)
 
-    control_rate: 20.0      # Hz
+    control_rate: 50.0      # Hz
     start_delay: 2.0        # s
