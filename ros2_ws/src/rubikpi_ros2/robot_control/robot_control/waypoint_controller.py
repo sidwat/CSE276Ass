@@ -63,6 +63,7 @@ class Gains:
     max_w: float = 1.0               # rad/s
     min_w: float = 0.4               # rad/s, below this the motors stall
     realign_angle: float = 0.5       # rad, stop and turn in place if heading drifts this far
+    replan_distance: float = 0.1     # m, drive back if a correction puts the waypoint this far off
 
 
 class WaypointController:
@@ -119,6 +120,9 @@ class WaypointController:
                     return v, w, None
 
             else:  # ROTATE_TO_HEADING
+                if dist > g.replan_distance:
+                    self.phase = self.ROTATE_TO_TARGET
+                    continue
                 heading_err = wrap_angle(goal_theta - theta)
                 if abs(heading_err) < g.heading_tolerance:
                     reached = self.index
