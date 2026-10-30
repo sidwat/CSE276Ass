@@ -1,0 +1,34 @@
+# Null values are intentional: replace them with measured values, not estimates.
+reviewed: false
+camera_frame: camera_frame  # existing driver name; coordinates are optical
+calibration_resolution: [1280, 720]
+base_camera:
+  xyz: null  # optical origin in base_link, metres
+  rpy: null  # optical axes in base_link, fixed roll/pitch/yaw radians
+# Prior HW1 values; revalidate on the deployment surface and battery.
+motion: {speed_per_unit: 1.26, wheel_base: 0.68, wheel_trim: -0.06, max_cmd: 0.25}
+waypoints: [[0, 0, 0], [1, 0, 0], [1, 2, 3.141592653589793], [0, 0, 0]]
+filter:
+  process_std: [0.05, 0.05, 0.12]  # per sqrt(second); initial tuning only
+  visual_std: [0.06, 0.06, 0.12]   # metres, metres, radians; replace using static tests
+  nis_gate: 11.34
+vision:
+  max_age: 0.15
+  max_range: 3.0
+  min_margin: 30.0
+  max_reprojection_px: 2.0
+control:
+  blind_timeout: 0.5
+  pause_at_waypoint: 2.0
+  max_v: 0.12
+  max_w: 0.6
+# Keys below are SLOT numbers, not confirmed printed tag IDs. IDs must be unique.
+tags:
+  - {slot: 1, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 2, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 3, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 4, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 5, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 6, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 7, id: null, size: null, xyz: null, rpy: null}
+  - {slot: 8, id: null, size: null, xyz: null, rpy: null}
