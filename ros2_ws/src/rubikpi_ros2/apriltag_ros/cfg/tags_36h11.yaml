@@ -19,6 +19,6 @@
 
         # optional list of tags
         tag:
-            ids: [0, 1, 2]         # tag ID
-            frames: [tag_0, tag_1, tag_2]  # optional frame name
-            sizes: [0.18, 0.18, 0.18]  # optional tag-specific edge size
+            ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]         # tag ID
+            frames: [tag_0, tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7, tag_8, tag_9]  # optional frame name
+            sizes: [0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18]  # optional tag-specific edge size
