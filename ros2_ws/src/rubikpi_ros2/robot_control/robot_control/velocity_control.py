@@ -9,7 +9,8 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
-from robot_control.localization import load_landmarks, NoiseParams, PoseEKF, tag_measurement
+from robot_control.localization import (
+    expected_measurement, load_landmarks, NoiseParams, PoseEKF, tag_measurement)
 from robot_control.waypoint_controller import (
     body_to_wheel_cmds, Gains, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
 from sensor_msgs.msg import Imu
@@ -55,6 +56,7 @@ class VelocityControlNode(Node):
         self.declare_parameter('camera_x', 0.0)        # m, camera ahead of the rotation centre
         self.declare_parameter('camera_y', 0.0)        # m, camera left of the rotation centre
         self.declare_parameter('camera_yaw', 0.0)      # rad, 0 if the camera looks straight ahead
+        self.declare_parameter('camera_upside_down', False)  # image rotated 180 degrees
         self.declare_parameter('max_tag_range', 3.0)   # m, ignore tags farther than this
         self.declare_parameter('relocalize_after', 15)  # rejections in a row before forcing one
         self.declare_parameter('log_dir', '')          # write trajectory/waypoint CSVs under here
@@ -116,7 +118,7 @@ class VelocityControlNode(Node):
         for i, (wx, wy, wt) in enumerate(waypoints):
             self.get_logger().info(f'  [{i}] x={wx:.2f} y={wy:.2f} theta={wt:.2f}')
 
-        self.trajectory_log = self.waypoint_log = None
+        self.trajectory_log = self.waypoint_log = self.measurement_log = None
         log_dir = self.get_parameter('log_dir').value
         if log_dir:
             self.setup_logs(os.path.expanduser(log_dir))
@@ -133,6 +135,7 @@ class VelocityControlNode(Node):
         self.camera_frame = self.get_parameter('camera_frame').value
         self.camera_pose = tuple(float(self.get_parameter(name).value)
                                  for name in ('camera_x', 'camera_y', 'camera_yaw'))
+        self.camera_upside_down = bool(self.get_parameter('camera_upside_down').value)
         self.max_tag_range = float(self.get_parameter('max_tag_range').value)
         self.relocalize_after = int(self.get_parameter('relocalize_after').value)
         self.create_subscription(TFMessage, '/tf', self.tf_callback, 100)
@@ -153,6 +156,13 @@ class VelocityControlNode(Node):
             ['index', 't', 'goal_x', 'goal_y', 'goal_theta', 'x', 'y', 'theta'])
         if self.ekf is not None:
             shutil.copy(self.landmarks_file, os.path.join(run_dir, 'landmarks.txt'))
+            # Every tag sighting next to what the current estimate predicted, for debugging
+            self.measurement_file = open(
+                os.path.join(run_dir, 'measurements.csv'), 'w', newline='')
+            self.measurement_log = csv.writer(self.measurement_file)
+            self.measurement_log.writerow(
+                ['t', 'tag', 'range', 'bearing', 'orientation', 'exp_range', 'exp_bearing',
+                 'exp_orientation', 'x', 'y', 'theta', 'accepted', 'mahalanobis2'])
         self.log_period = float(self.get_parameter('log_period').value)
         self.log_start = time.monotonic()
         self.last_log = -math.inf
@@ -176,7 +186,8 @@ class VelocityControlNode(Node):
             normal = (2.0 * (q.x * q.z + q.w * q.y),
                       2.0 * (q.y * q.z - q.w * q.x),
                       1.0 - 2.0 * (q.x * q.x + q.y * q.y))  # tag z axis in the camera frame
-            measurement = tag_measurement((t.x, t.y, t.z), normal, self.camera_pose)
+            measurement = tag_measurement(
+                (t.x, t.y, t.z), normal, self.camera_pose, self.camera_upside_down)
             if measurement[0] > self.max_tag_range:
                 continue
 
@@ -186,8 +197,15 @@ class VelocityControlNode(Node):
                 self.get_logger().warn(f'{self.rejected_in_row} sightings rejected in a row; '
                                        f're-localizing on tag {tag_id}')
                 self.ekf.inflate((0.3, 0.3, 0.3))
+            pose = self.ekf.pose
             accepted, distance = self.ekf.correct(
                 measurement, self.landmarks[tag_id], stamp, force=force)
+            if self.measurement_log:
+                expected = expected_measurement(pose, self.landmarks[tag_id])
+                self.measurement_log.writerow(
+                    [f'{time.monotonic() - self.log_start:.2f}', tag_id]
+                    + [f'{v:.4f}' for v in (*measurement, *expected, *pose)]
+                    + [int(accepted), f'{distance:.1f}'])
             if accepted:
                 self.rejected_in_row = 0
                 self.tags_seen += 1
@@ -275,6 +293,8 @@ class VelocityControlNode(Node):
         if self.trajectory_log:
             self.trajectory_file.close()
             self.waypoint_file.close()
+        if self.measurement_log:
+            self.measurement_file.close()
         super().destroy_node()
 
 

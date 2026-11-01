@@ -27,7 +27,7 @@ def load_landmarks(path):
     return landmarks
 
 
-def tag_measurement(translation, normal, camera_pose):
+def tag_measurement(translation, normal, camera_pose, upside_down=False):
     """
     Turn a tag pose in the camera optical frame into (range, bearing, orientation) on the robot.
 
@@ -36,9 +36,12 @@ def tag_measurement(translation, normal, camera_pose):
     y left). range and bearing locate the tag centre in the floor plane; orientation is the
     direction the printed face points, in the robot frame. The sign of the tag's z axis differs
     between pose estimators, so the normal is flipped to point back at the camera if needed.
+    upside_down is for a camera mounted rotated 180 degrees about its optical axis.
     """
     tx, ty, tz = translation
     nx, ny, nz = normal
+    if upside_down:
+        tx, ty, nx, ny = -tx, -ty, -nx, -ny
     if nx * tx + ny * ty + nz * tz > 0:
         nx, nz = -nx, -nz
     cam_x, cam_y, cam_yaw = camera_pose
@@ -47,6 +50,15 @@ def tag_measurement(translation, normal, camera_pose):
     py = cam_y + s * tz - c * tx
     face = cam_yaw + math.atan2(-nx, nz)
     return math.hypot(px, py), math.atan2(py, px), wrap_angle(face)
+
+
+def expected_measurement(pose, landmark):
+    """(range, bearing, orientation) of the landmark (x, y, yaw) seen from pose (x, y, theta)."""
+    x, y, theta = pose
+    lx, ly, lyaw = landmark
+    return (math.hypot(lx - x, ly - y),
+            wrap_angle(math.atan2(ly - y, lx - x) - theta),
+            wrap_angle(lyaw - theta))
 
 
 @dataclass
@@ -124,12 +136,11 @@ class PoseEKF:
         more than the gate are rejected as outliers, unless force is set (re-localization).
         """
         n = self.noise
-        x, y, theta = self._pose_at(stamp)
-        lx, ly, lyaw = landmark
-        dx, dy = lx - x, ly - y
+        pose = self._pose_at(stamp)
+        dx, dy = landmark[0] - pose[0], landmark[1] - pose[1]
         q = dx * dx + dy * dy
         r = math.sqrt(q)
-        expected = np.array([r, wrap_angle(math.atan2(dy, dx) - theta), wrap_angle(lyaw - theta)])
+        expected = np.array(expected_measurement(pose, landmark))
         H = np.array([[-dx / r, -dy / r, 0.0],
                       [dy / q, -dx / q, -1.0],
                       [0.0, 0.0, -1.0]])

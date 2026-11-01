@@ -15,6 +15,23 @@ def read_csv(path):
         return [{k: float(v) for k, v in row.items()} for row in csv.DictReader(f)]
 
 
+def print_tag_check(measurements):
+    """Compare each tag sighting with what the pose estimate predicted, to catch setup errors."""
+    print('\nTag  sightings  accepted  range/expected  bearing sign agrees')
+    for tag in sorted({int(m['tag']) for m in measurements}):
+        rows = [m for m in measurements if int(m['tag']) == tag]
+        ratios = sorted(m['range'] / m['exp_range'] for m in rows)
+        # Only sightings well off the image centre say anything about the sign
+        off_centre = [m for m in rows if abs(m['exp_bearing']) > 0.15]
+        agree = sum((m['bearing'] > 0) == (m['exp_bearing'] > 0) for m in off_centre)
+        sign = f'{agree}/{len(off_centre)}' if off_centre else 'n/a (always near centre)'
+        print(f'  {tag:<4} {len(rows):>6}  {int(sum(m["accepted"] for m in rows)):>8}'
+              f'  {ratios[len(ratios) // 2]:>13.3f}   {sign}')
+    print('A bearing sign that mostly disagrees means the image is upside down '
+          '(camera_upside_down: true).\nA range ratio away from 1 for every tag means the tag '
+          'size is wrong; for one tag, its position in landmarks.txt.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_dir', nargs='?',
@@ -45,6 +62,10 @@ def main():
               f'   {err_pos:.3f}, {err_rot:+.1f}')
     print('The estimate errors only show controller tolerance; measure the true pose at each '
           'waypoint marker with a tape for the localization error.')
+
+    measurements_path = os.path.join(run_dir, 'measurements.csv')
+    if os.path.exists(measurements_path):
+        print_tag_check(read_csv(measurements_path))
 
     import matplotlib
     matplotlib.use('Agg')

@@ -8,9 +8,10 @@ velocity_control_node:
 
     use_vision: true
     camera_frame: camera_frame
-    camera_x: 0.0           # m, camera lens ahead of the point the robot turns about: MEASURE THIS
+    camera_x: 0.1           # m, camera lens ahead of the point the robot turns about: MEASURE THIS
     camera_y: 0.0           # m, camera left of that point
     camera_yaw: 0.0         # rad
+    camera_upside_down: false  # true if the camera image is rotated 180 degrees (see measurements.csv)
     max_tag_range: 3.0      # m
     relocalize_after: 15    # rejected sightings in a row before trusting the tags over odometry
     log_dir: ~/hw2_logs

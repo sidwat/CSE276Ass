@@ -35,6 +35,10 @@ def test_tag_measurement_from_optical_frame():
     r, bearing, _ = tag_measurement((-1, 0.05, 1), (0, 0, -1), (0, 0, 0))
     assert (r, bearing) == pytest.approx((math.sqrt(2), math.pi / 4))
 
+    # Upside-down camera: the tag appears on the other side of the image
+    r, bearing, _ = tag_measurement((1, -0.05, 1), (0, 0, -1), (0, 0, 0), upside_down=True)
+    assert (r, bearing) == pytest.approx((math.sqrt(2), math.pi / 4))
+
     # Camera 0.1 m ahead of the rotation centre adds to the range
     assert tag_measurement((0, 0, 2), (0, 0, -1), (0.1, 0, 0))[0] == pytest.approx(2.1)
 
