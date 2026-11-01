@@ -5,65 +5,42 @@ import math
 from pathlib import Path
 import time
 
-import cv2
 import numpy as np
-import yaml
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from apriltag_msgs.msg import AprilTagDetectionArray
-from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path as RosPath
-from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32MultiArray, String
 from robot_control.waypoint_controller import (
     Gains, WaypointController, body_to_wheel_cmds, wheel_cmds_to_body)
-from hw2_navigation.core import PoseFilter, base_pose, transform
-
-
-def stamp_seconds(stamp):
-    return stamp.sec + stamp.nanosec*1e-9
-
-
-def load_config(path, enable):
-    with open(path) as stream:
-        cfg = yaml.safe_load(stream)
-    tags = [t for t in cfg['tags'] if all(t[k] is not None for k in ('id', 'size', 'xyz', 'rpy'))]
-    if len({t['id'] for t in tags}) != len(tags):
-        raise ValueError('Duplicate tag IDs')
-    for t in tags:
-        if t['size'] <= 0 or not np.isfinite(t['xyz'] + t['rpy']).all():
-            raise ValueError('Invalid tag geometry')
-    m = cfg['motion']
-    if not (m['speed_per_unit'] > 0 and m['wheel_base'] > 0 and
-            0 < m['max_cmd'] <= 0.5 and abs(m['wheel_trim']) < 1):
-        raise ValueError('Invalid motion calibration')
-    mount = cfg['base_camera']
-    complete = mount['xyz'] is not None and mount['rpy'] is not None
-    if enable and (not cfg['reviewed'] or not complete or len(tags) != 8):
-        raise ValueError('Motion requires reviewed=true, measured camera mount and all eight tags')
-    return cfg, {int(t['id']): t for t in tags}, complete
+from hw2_navigation.core import PoseFilter, transform
+from hw2_navigation.configuration import load_config
+from hw2_navigation.visual_localization import VisualLocalizer
+from tf2_ros import Buffer, TransformListener, TransformException
+from rclpy.time import Time
 
 
 class Navigator(Node):
     def __init__(self):
         super().__init__('hw2_navigator')
         self.declare_parameter('config', '')
+        self.declare_parameter('detector_config', '')
         self.declare_parameter('enable_motion', False)
         self.declare_parameter('csv_path', '/tmp/hw2-live.csv')
         self.enabled = self.get_parameter('enable_motion').value
-        self.cfg, self.tags, self.mount_ready = load_config(self.get_parameter('config').value, self.enabled)
+        self.cfg, self.tags, self.mount_ready = load_config(
+            self.get_parameter('config').value, self.enabled,
+            self.get_parameter('detector_config').value)
         self.filter = PoseFilter(self.cfg['filter']['process_std'])
         g = Gains(max_v=self.cfg['control']['max_v'], max_w=self.cfg['control']['max_w'],
                   min_v=0.03, min_w=0.15)
         self.controller = WaypointController(self.cfg['waypoints'], g)
         self.base_camera = (transform(**self.cfg['base_camera']) if self.mount_ready else None)
-        self.info = None
-        self.corners = []
-        self.bridge = CvBridge()
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.localizer = VisualLocalizer(self.cfg, self.tags, self.base_camera)
         self.last_seen = None
-        self.last_stamp = -float('inf')
         self.last_tick = time.monotonic()
         self.hold_until = 0.0
         self.v = self.w = 0.0
@@ -77,10 +54,7 @@ class Navigator(Node):
         self.pose_pub = self.create_publisher(PoseStamped, '/hw2/pose', 10)
         self.path_pub = self.create_publisher(RosPath, '/hw2/path', 1)
         self.debug = self.create_publisher(String, '/hw2/status', 10)
-        self.overlay = self.create_publisher(Image, '/hw2/overlay', 1)
-        self.create_subscription(CameraInfo, '/camera/camera_info', self.on_info, qos_profile_sensor_data)
         self.create_subscription(AprilTagDetectionArray, '/detections', self.on_detections, 10)
-        self.create_subscription(Image, '/camera/image_rect', self.on_image, qos_profile_sensor_data)
         path = Path(self.get_parameter('csv_path').value)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Exclusive creation avoids silently replacing previous experimental data.
@@ -90,83 +64,35 @@ class Navigator(Node):
                               'v', 'w', 'waypoint', 'reached', 'visual_age', 'accepted', 'rejected', 'state'])
         self.tick_count = 0
         self.create_timer(0.05, self.tick)
-        self.get_logger().info(f'Motion enabled: {self.enabled}; measured tags: {len(self.tags)}/8')
-
-    def on_info(self, msg):
-        self.info = msg
+        self.get_logger().info(f'Motion enabled: {self.enabled}; surveyed tags: {len(self.tags)}')
 
     def on_detections(self, msg):
-        self.corners = [(d.id, [(p.x, p.y) for p in d.corners]) for d in msg.detections]
-        self.overlay_stamp = stamp_seconds(msg.header.stamp)
-        age = self.get_clock().now().nanoseconds*1e-9 - self.overlay_stamp
-        if (age < -0.02 or age > self.cfg['vision']['max_age'] or
-                self.overlay_stamp <= self.last_stamp):
-            self.last_reason = 'stale_or_out_of_order_image'
-            return
-        self.last_stamp = self.overlay_stamp
-        if self.info is None or self.base_camera is None:
-            self.last_reason = 'missing_camera_info_or_mount'
-            return
-        if (msg.header.frame_id != self.cfg['camera_frame'] or
-                self.info.header.frame_id != msg.header.frame_id or
-                [self.info.width, self.info.height] != self.cfg['calibration_resolution']):
-            self.last_reason = 'camera_frame_or_resolution_mismatch'
-            return
-        k = np.asarray(self.info.p).reshape(3, 4)[:, :3].copy()
-        if not np.isfinite(k).all() or min(k[0, 0], k[1, 1]) <= 0:
-            self.last_reason = 'invalid_intrinsics'
-            return
-        candidates = []
-        for d in msg.detections:
-            tag = self.tags.get(d.id)
-            if tag is None or d.hamming != 0 or d.decision_margin < self.cfg['vision']['min_margin']:
-                continue
-            s = tag['size']/2
-            obj = np.array([[-s, -s, 0], [s, -s, 0], [s, s, 0], [-s, s, 0]], dtype=float)
-            pixels = np.array([[p.x, p.y] for p in d.corners], dtype=float)
-            ok, r, t = cv2.solvePnP(obj, pixels, k, None, flags=cv2.SOLVEPNP_ITERATIVE)
-            if not ok or t[2, 0] <= 0 or np.linalg.norm(t) > self.cfg['vision']['max_range']:
-                continue
-            projection, _ = cv2.projectPoints(obj, r, t, k, None)
-            error = float(np.sqrt(np.mean(np.sum((projection.reshape(-1, 2)-pixels)**2, axis=1))))
-            if error > self.cfg['vision']['max_reprojection_px']:
-                continue
-            ct = np.eye(4)
-            ct[:3, :3], ct[:3, 3] = cv2.Rodrigues(r)[0], t.ravel()
-            z = base_pose(transform(tag['xyz'], tag['rpy']), ct, self.base_camera)
-            # Conservative range-dependent heuristic; replace with measured static covariance.
-            std = np.asarray(self.cfg['filter']['visual_std'])*max(1.0, float(np.linalg.norm(t)))
-            candidates.append((error, z, np.diag(std**2)))
-        # One update per image avoids claiming independence for correlated same-image tags.
-        # Try the lowest reprojection error first; retain EKF innovation rejection.
-        for _, z, covariance in sorted(candidates, key=lambda item: item[0]):
-            ok, nis = self.filter.correct(z, covariance, self.cfg['filter']['nis_gate'])
-            if ok:
-                self.last_seen = time.monotonic()
-                self.accepted += 1
-                self.last_reason = f'visual_accepted_nis={nis:.2f}'
-                return
-            self.rejected += 1
-        self.last_reason = 'no_valid_visual_update'
+        self.last_reason = self.localizer.enqueue(msg, self.get_clock().now().nanoseconds)
 
-    def on_image(self, msg):
-        if self.overlay.get_subscription_count() == 0:
-            return
-        img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8').copy()
-        if abs(stamp_seconds(msg.header.stamp)-getattr(self, 'overlay_stamp', -1)) < 0.1:
-            for tag_id, points in self.corners:
-                pts = np.asarray(points, dtype=np.int32)
-                cv2.polylines(img, [pts], True, (0, 255, 0), 2)
-                cv2.putText(img, str(tag_id), tuple(pts[0]), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0), 2)
-        cv2.putText(img, self.last_reason, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 200, 255), 1)
-        result = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
-        result.header = msg.header
-        self.overlay.publish(result)
+    def lookup_tag_transform(self, camera_frame, tag_frame, stamp):
+        """Nonblocking lookup at capture time; missing TF is retried next tick."""
+        try:
+            return self.tf_buffer.lookup_transform(
+                camera_frame, tag_frame, Time.from_msg(stamp))
+        except TransformException:
+            return None
+
+    def update_visual_pose(self, now):
+        result = self.localizer.process(
+            self.get_clock().now().nanoseconds,
+            self.lookup_tag_transform, self.filter)
+        self.last_reason = result.reason
+        self.rejected += result.rejected
+        if result.accepted:
+            # Account for capture/transport delay in the blind-stop interval.
+            self.last_seen = now-result.age
+            self.accepted += 1
 
     def tick(self):
         now = time.monotonic()
         dt, self.last_tick = now-self.last_tick, now
         healthy_dt = self.filter.predict(self.v, self.w, dt)
+        self.update_visual_pose(now)
         age = now-self.last_seen if self.last_seen is not None else float('inf')
         state = 'tracking'
         reached = None

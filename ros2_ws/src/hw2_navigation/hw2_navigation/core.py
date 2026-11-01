@@ -3,6 +3,11 @@ import math
 import numpy as np
 
 
+def stamp_ns(stamp):
+    """Convert a ROS-style sec/nanosec timestamp without float rounding."""
+    return stamp.sec*1_000_000_000 + stamp.nanosec
+
+
 def wrap(a):
     return math.atan2(math.sin(a), math.cos(a))
 
@@ -23,12 +28,15 @@ def base_pose(world_tag, camera_tag, base_camera):
     return np.array([t[0, 3], t[1, 3], math.atan2(t[1, 0], t[0, 0])])
 
 
+# the Kalman filter
 class PoseFilter:
     def __init__(self, process_std=(0.05, 0.05, 0.12)):
-        self.x = np.zeros(3)
-        self.P = np.diag([0.03, 0.03, 0.08])**2
-        self.q = np.asarray(process_std)**2
+        self.x = np.zeros(3) # the state
+        self.P = np.diag([0.03, 0.03, 0.08])**2 # the covariance of the state
+        self.q = np.asarray(process_std)**2 # the process noise covariance 
 
+
+    # motion model 
     def predict(self, v, w, dt):
         if not 0 < dt <= 0.2:
             return False
@@ -37,6 +45,8 @@ class PoseFilter:
         f[0, 2], f[1, 2] = -v*dt*math.sin(h), v*dt*math.cos(h)
         self.x += [v*dt*math.cos(h), v*dt*math.sin(h), w*dt]
         self.x[2] = wrap(self.x[2])
+
+        # this is the updating the covariance
         self.P = f @ self.P @ f.T + np.diag(self.q)*dt
         return True
 

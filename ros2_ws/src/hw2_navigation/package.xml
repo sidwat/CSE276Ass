@@ -4,7 +4,7 @@
   <description>HW2 visual feedback navigation starter</description>
   <maintainer email="student@example.com">Student</maintainer><license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>
-  <exec_depend>rclpy</exec_depend><exec_depend>robot_control</exec_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>tf2_ros_py</exec_depend><exec_depend>robot_control</exec_depend>
   <exec_depend>apriltag_ros</exec_depend><exec_depend>apriltag_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend><exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend><exec_depend>std_msgs</exec_depend>
