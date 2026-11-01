@@ -89,6 +89,8 @@ class VelocityControlNode(Node):
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
+        # Motion model alone (commanded velocities, never corrected), logged for comparison
+        self.odom = [0.0, 0.0, 0.0]
         self.v = 0.0
         self.w = 0.0
 
@@ -148,7 +150,8 @@ class VelocityControlNode(Node):
         self.trajectory_file = open(os.path.join(run_dir, 'trajectory.csv'), 'w', newline='')
         self.trajectory_log = csv.writer(self.trajectory_file)
         self.trajectory_log.writerow(
-            ['t', 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta', 'waypoint', 'tags_seen'])
+            ['t', 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta', 'waypoint', 'tags_seen',
+             'odom_x', 'odom_y', 'odom_theta'])
         self.waypoint_file = open(os.path.join(run_dir, 'waypoints.csv'), 'w', newline='')
         self.waypoint_log = csv.writer(self.waypoint_file)
         self.waypoint_log.writerow(
@@ -248,6 +251,10 @@ class VelocityControlNode(Node):
         self.send(v, w)
 
     def integrate_pose(self, dt):
+        heading = self.odom[2] + self.w * dt / 2.0
+        self.odom = [self.odom[0] + self.v * math.cos(heading) * dt,
+                     self.odom[1] + self.v * math.sin(heading) * dt,
+                     wrap_angle(self.odom[2] + self.w * dt)]
         if self.ekf is not None:
             w = self.w
             if self.use_imu and self.imu_yaw is not None:
@@ -274,7 +281,8 @@ class VelocityControlNode(Node):
         self.trajectory_log.writerow(
             [f'{now - self.log_start:.2f}', f'{self.x:.4f}', f'{self.y:.4f}', f'{self.theta:.4f}',
              f'{std[0]:.4f}', f'{std[1]:.4f}', f'{std[2]:.4f}',
-             self.controller.index, self.tags_seen])
+             self.controller.index, self.tags_seen]
+            + [f'{v:.4f}' for v in self.odom])
         self.trajectory_file.flush()
         self.tags_seen = 0
 

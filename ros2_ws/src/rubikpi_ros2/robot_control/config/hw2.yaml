@@ -28,7 +28,7 @@ velocity_control_node:
     # Tolerances are looser than HW1: the estimate now has a few cm of camera noise, and a
     # tolerance below that makes the robot hunt back and forth at each waypoint.
     pos_tolerance: 0.03     # m
-    heading_tolerance: 0.03 # rad
+    heading_tolerance: 0.05 # rad, the faster turns below cannot stop within 0.03
     replan_distance: 0.1    # m
     k_v: 1.26
     k_w: 1.26
@@ -37,13 +37,15 @@ velocity_control_node:
     # An in-place turn sends each wheel 0.27 * w (wheel_base / 2 / speed_per_unit). Turning in
     # place needs far more torque than driving straight, so max_w starts the turn hard enough to
     # break static friction and min_w keeps it from stalling just short of the target.
-    max_w: 1.26             # rad/s -> wheel command 0.34, as in HW1
-    min_w: 0.6              # rad/s -> wheel command 0.16; raise if turns stop short
+    max_w: 1.8              # rad/s -> wheel command 0.49, just under motor_control's 0.5 clip
+    min_w: 0.9              # rad/s -> wheel command 0.24; raise if turns stop short
     realign_angle: 0.5      # rad
 
     # --- EKF noise (see robot_control/localization.py) ---
     odom_dist_std: 0.1      # m of error after driving 1 m
-    odom_turn_std: 0.1      # rad of error after turning 1 rad
+    # Commanded in-place turns are unreliable (the wheels can stall), so rotation is trusted
+    # little and the camera decides how far the robot has actually turned.
+    odom_turn_std: 0.5      # rad of error after turning 1 rad
     odom_drift_std: 0.05    # rad of heading drift after driving 1 m
     range_std: 0.02         # m
     range_std_per_m: 0.03

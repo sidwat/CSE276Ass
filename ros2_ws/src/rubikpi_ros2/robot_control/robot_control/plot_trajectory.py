@@ -32,6 +32,37 @@ def print_tag_check(measurements):
           'size is wrong; for one tag, its position in landmarks.txt.')
 
 
+def pose_from_sighting(m, landmark):
+    """Robot pose implied by one tag sighting alone (sensor model, no motion model)."""
+    lx, ly, lyaw = landmark
+    theta = wrap_angle(lyaw - m['orientation'])
+    heading = theta + m['bearing']
+    return (lx - m['range'] * math.cos(heading), ly - m['range'] * math.sin(heading), theta)
+
+
+def draw_map(ax, landmarks, goals):
+    for gx, gy, gt in goals:
+        ax.annotate('', xy=(gx + 0.15 * math.cos(gt), gy + 0.15 * math.sin(gt)), xytext=(gx, gy),
+                    arrowprops={'arrowstyle': '->', 'color': 'blue'})
+    ax.scatter([g[0] for g in goals], [g[1] for g in goals], s=80, facecolors='none',
+               edgecolors='blue', linewidths=1.5, zorder=3, label='waypoint')
+    for tag_id, (lx, ly, lyaw) in landmarks.items():
+        half = 0.09
+        ax.plot([lx - half * math.sin(lyaw), lx + half * math.sin(lyaw)],
+                [ly + half * math.cos(lyaw), ly - half * math.cos(lyaw)],
+                color='black', linewidth=4)
+        ax.annotate(f'tag {tag_id}', (lx, ly), textcoords='offset points', xytext=(6, 6))
+
+
+def finish(ax, title):
+    ax.set_xlabel('x [m]')
+    ax.set_ylabel('y [m]')
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper left', fontsize='small')
+    ax.set_title(title)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_dir', nargs='?',
@@ -71,32 +102,62 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 7))
-    ax.plot([p['x'] for p in trajectory], [p['y'] for p in trajectory],
-            color='0.8', linewidth=1, zorder=1)
-    ax.scatter([p['x'] for p in trajectory], [p['y'] for p in trajectory],
-               s=14, color='red', zorder=2, label='estimated pose (every log_period)')
     goals = [(w['goal_x'], w['goal_y'], w['goal_theta']) for w in reached]
-    for gx, gy, gt in goals:
-        ax.annotate('', xy=(gx + 0.15 * math.cos(gt), gy + 0.15 * math.sin(gt)), xytext=(gx, gy),
-                    arrowprops={'arrowstyle': '->', 'color': 'blue'})
-    ax.scatter([g[0] for g in goals], [g[1] for g in goals], s=80, facecolors='none',
-               edgecolors='blue', linewidths=1.5, zorder=3, label='waypoint')
-    for tag_id, (lx, ly, lyaw) in landmarks.items():
-        half = 0.09
-        ax.plot([lx - half * math.sin(lyaw), lx + half * math.sin(lyaw)],
-                [ly + half * math.cos(lyaw), ly - half * math.cos(lyaw)],
-                color='black', linewidth=4)
-        ax.annotate(f'tag {tag_id}', (lx, ly), textcoords='offset points', xytext=(6, 6))
-    ax.set_xlabel('x [m]')
-    ax.set_ylabel('y [m]')
-    ax.set_aspect('equal')
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper left')
-    ax.set_title('Estimated trajectory')
+    fused = ([p['x'] for p in trajectory], [p['y'] for p in trajectory])
+
+    # Report figure: the EKF estimate, one dot per log_period
+    fig, ax = plt.subplots(figsize=(7, 7))
+    draw_map(ax, landmarks, goals)
+    ax.plot(*fused, color='0.8', linewidth=1, zorder=1)
+    ax.scatter(*fused, s=14, color='red', zorder=2, label='EKF estimate (every log_period)')
+    finish(ax, 'Estimated trajectory')
     output = args.output or os.path.join(run_dir, 'trajectory.png')
     fig.savefig(output, dpi=150, bbox_inches='tight')
     print(f'\nWrote {output}')
+
+    # Motion model alone, sensor model alone, and the EKF that fuses them
+    has_odom = 'odom_x' in trajectory[0]
+    odom = ([p['odom_x'] for p in trajectory], [p['odom_y'] for p in trajectory]) \
+        if has_odom else ([], [])
+    sightings = read_csv(measurements_path) if os.path.exists(measurements_path) else []
+    sightings = [m for m in sightings if int(m['tag']) in landmarks]
+    for m in sightings:
+        m['pose'] = pose_from_sighting(m, landmarks[int(m['tag'])])
+    fig, axes = plt.subplots(2, 2, figsize=(13, 13))
+    (ax_odom, ax_sensor), (ax_fused, ax_all) = axes
+    for ax in axes.ravel():
+        draw_map(ax, landmarks, goals)
+
+    ax_odom.plot(*odom, color='tab:green', marker='.', markersize=5, linewidth=1)
+    finish(ax_odom, 'Motion model only (commanded velocities)'
+           if has_odom else 'Motion model: not in this log (older run)')
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    for i, tag in enumerate(sorted({int(m['tag']) for m in sightings})):
+        for accepted, marker in ((1, 'o'), (0, 'x')):
+            rows = [m for m in sightings
+                    if int(m['tag']) == tag and int(m['accepted']) == accepted]
+            if not rows:
+                continue
+            ax_sensor.scatter([m['pose'][0] for m in rows], [m['pose'][1] for m in rows],
+                              s=10, marker=marker,
+                              color=colors[i % len(colors)],
+                              label=f'tag {tag}' + ('' if accepted else ' (rejected)'))
+    finish(ax_sensor, 'Sensor model only (one dot per tag sighting)')
+
+    ax_fused.plot(*fused, color='0.8', linewidth=1, zorder=1)
+    ax_fused.scatter(*fused, s=14, color='red', zorder=2)
+    finish(ax_fused, 'EKF: motion and sensor models fused')
+
+    ax_all.plot(*odom, color='tab:green', linewidth=1.5, label='motion model')
+    ax_all.scatter([m['pose'][0] for m in sightings], [m['pose'][1] for m in sightings],
+                   s=6, color='tab:blue', alpha=0.4, label='sensor model')
+    ax_all.plot(*fused, color='red', linewidth=2, label='EKF')
+    finish(ax_all, 'All three')
+
+    output = os.path.join(run_dir, 'models.png')
+    fig.savefig(output, dpi=120, bbox_inches='tight')
+    print(f'Wrote {output}')
 
 
 if __name__ == '__main__':
