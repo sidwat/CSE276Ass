@@ -13,7 +13,9 @@ velocity_control_node:
     camera_yaw: 0.0         # rad
     camera_upside_down: false  # true if the camera image is rotated 180 degrees (see measurements.csv)
     max_tag_range: 3.0      # m
-    relocalize_after: 15    # rejected sightings in a row before trusting the tags over odometry
+    relocalize_after: 8     # rejected sightings in a row before trusting the tags over odometry
+    use_imu: false          # true: predict heading from the IMU yaw, so a stalled turn is noticed
+    imu_yaw_sign: 1.0       # -1.0 if the IMU yaw decreases when the robot turns left (CCW)
     log_dir: ~/hw2_logs
     log_period: 0.5         # s, one dot per log_period in the trajectory plot
 
@@ -32,8 +34,11 @@ velocity_control_node:
     k_w: 1.26
     max_v: 0.25             # m/s, slower than HW1 so camera frames are not motion-blurred
     min_v: 0.05             # m/s
-    max_w: 0.8              # rad/s
-    min_w: 0.4              # rad/s
+    # An in-place turn sends each wheel 0.27 * w (wheel_base / 2 / speed_per_unit). Turning in
+    # place needs far more torque than driving straight, so max_w starts the turn hard enough to
+    # break static friction and min_w keeps it from stalling just short of the target.
+    max_w: 1.26             # rad/s -> wheel command 0.34, as in HW1
+    min_w: 0.6              # rad/s -> wheel command 0.16; raise if turns stop short
     realign_angle: 0.5      # rad
 
     # --- EKF noise (see robot_control/localization.py) ---

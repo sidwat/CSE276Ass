@@ -2,13 +2,13 @@
     ros__parameters:
         image_transport: raw    # image format
         family: 36h11           # tag family name
-        size: 0.18              # tag edge size in meter (outer edge of the black square)
+        size: 0.173              # tag edge size in meter (outer edge of the black square)
         max_hamming: 1          # maximum allowed hamming distance (corrected bits)
 
         # see "apriltag.h" 'struct apriltag_detector' for more documentation on these optional parameters
         detector:
             threads: 4          # number of threads
-            decimate: 2.0       # decimate resolution for quad detection
+            decimate: 1.5       # decimate resolution for quad detection
             blur: 0.0           # sigma of Gaussian blur for quad detection
             refine: True        # snap to strong gradients
             sharpening: 0.4     # sharpening of decoded images
@@ -21,4 +21,4 @@
         tag:
             ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]         # tag ID
             frames: [tag_0, tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7, tag_8, tag_9]  # optional frame name
-            sizes: [0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18, 0.18]  # optional tag-specific edge size
+            sizes: [0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173]  # optional tag-specific edge size

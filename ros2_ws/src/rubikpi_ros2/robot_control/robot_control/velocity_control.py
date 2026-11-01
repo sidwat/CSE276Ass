@@ -34,7 +34,8 @@ class VelocityControlNode(Node):
 
     With use_vision:=true the dead reckoning becomes the prediction step of an EKF that is
     corrected by AprilTag sightings (camera_frame -> tag_N transforms on /tf from apriltag_node)
-    of the landmarks listed in landmarks_file.
+    of the landmarks listed in landmarks_file. With use_imu too, the prediction turns by the IMU
+    yaw change instead of the commanded turn rate, so a turn that stalls is not taken as done.
     """
 
     def __init__(self):
@@ -93,9 +94,7 @@ class VelocityControlNode(Node):
 
         self.imu_yaw = None
         self.imu_yaw_offset = None
-        if self.use_imu and self.use_vision:
-            self.get_logger().warn('use_imu is ignored with use_vision; the EKF gives heading')
-            self.use_imu = False
+        self.imu_yaw_last = None
         if self.use_imu:
             self.create_subscription(Imu, 'imu_data', self.imu_callback, 10)
 
@@ -250,7 +249,12 @@ class VelocityControlNode(Node):
 
     def integrate_pose(self, dt):
         if self.ekf is not None:
-            self.ekf.predict(self.v, self.w, dt, self.get_clock().now().nanoseconds * 1e-9)
+            w = self.w
+            if self.use_imu and self.imu_yaw is not None:
+                if self.imu_yaw_last is not None and dt > 0.0:
+                    w = self.imu_yaw_sign * wrap_angle(self.imu_yaw - self.imu_yaw_last) / dt
+                self.imu_yaw_last = self.imu_yaw
+            self.ekf.predict(self.v, w, dt, self.get_clock().now().nanoseconds * 1e-9)
             self.x, self.y, self.theta = self.ekf.pose
             return
         if self.use_imu and self.imu_yaw is not None:
