@@ -7,7 +7,7 @@
 # Every id must be a different physical tag: apriltag cannot tell two copies of one id apart.
 0, 2.4, 0.0, 3.14159    # 1 m past (1,0), facing -x: start, leg 1, waypoint (1,0,0) and the final (0,0,0)
 7, 2.4, 1.0, 3.14159
-1, 1.0, 2.4, -1.5708    # 1 m past (1,2), facing -y: the turn at (1,0) and leg 2
-5, -0.24, -0.44, 0.9828   # on the line from (1,2) through the origin, 0.9 m past it, facing up that line: leg 3
+1, 1.0, 2.83, -1.5708    # 1 m past (1,2), facing -y: the turn at (1,0) and leg 2
+5, -0.24, -0.44, 1.0714   # on the line from (1,2) through the origin, 0.9 m past it, facing up that line: leg 3
 3, 0.0, 2.0, 0 
-4, -0.63, 0.39, -0.5191
+4, -0.63, 0.39, -0.5543
