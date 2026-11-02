@@ -29,9 +29,15 @@ velocity_control_node:
     # tolerance below that makes the robot hunt back and forth at each waypoint.
     pos_tolerance: 0.03     # m
     heading_tolerance: 0.05 # rad, the faster turns below cannot stop within 0.03
-    replan_distance: 0.1    # m
+    replan_distance: 0.1    # m: inside this the robot never turns to face the waypoint
     settle_time: 1.0        # s stopped at each final heading for the camera to confirm it; the
                             # robot turns again if the heading is then off by > 2 * heading_tolerance
+    # If no tag was seen during the settle, the heading is only the motion model's claim (which
+    # over-claims on this robot), so it turns on in the same direction a step at a time, stopping
+    # to look after each step, until a tag confirms where it is.
+    search_turn_time: 0.3   # s per step (about 20 deg at min_w)
+    search_look_time: 1.0   # s stopped to look after each step
+    search_max_turn: 6.3    # rad of searching before accepting the estimate anyway
     k_v: 1.26
     k_w: 1.26
     max_v: 0.25             # m/s, slower than HW1 so camera frames are not motion-blurred

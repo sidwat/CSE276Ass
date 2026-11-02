@@ -89,8 +89,10 @@ class VelocityControlNode(Node):
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
-        # Motion model alone (commanded velocities, never corrected), logged for comparison
+        # Motion model alone (commanded velocities, never corrected), logged for comparison, and
+        # the motion model's prediction since the last log line, from the EKF pose at that line
         self.odom = [0.0, 0.0, 0.0]
+        self.prediction = [0.0, 0.0, 0.0]
         self.v = 0.0
         self.w = 0.0
 
@@ -102,6 +104,8 @@ class VelocityControlNode(Node):
 
         self.ekf = None
         self.tags_seen = 0
+        self.last_fix = -math.inf  # monotonic time of the last accepted tag sighting
+        self.last_phase = None
         self.rejected_in_row = 0
         if self.use_vision:
             self.setup_vision(noise_defaults)
@@ -151,7 +155,7 @@ class VelocityControlNode(Node):
         self.trajectory_log = csv.writer(self.trajectory_file)
         self.trajectory_log.writerow(
             ['t', 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta', 'waypoint', 'tags_seen',
-             'odom_x', 'odom_y', 'odom_theta'])
+             'odom_x', 'odom_y', 'odom_theta', 'pred_x', 'pred_y', 'pred_theta'])
         self.waypoint_file = open(os.path.join(run_dir, 'waypoints.csv'), 'w', newline='')
         self.waypoint_log = csv.writer(self.waypoint_file)
         self.waypoint_log.writerow(
@@ -211,6 +215,7 @@ class VelocityControlNode(Node):
             if accepted:
                 self.rejected_in_row = 0
                 self.tags_seen += 1
+                self.last_fix = time.monotonic()
             else:
                 self.rejected_in_row += 1
                 self.get_logger().info(
@@ -233,7 +238,16 @@ class VelocityControlNode(Node):
             self.send(0.0, 0.0)
             return
 
-        v, w, reached = self.controller.update(self.x, self.y, self.theta, dt)
+        # Without the camera, any heading counts; with it, only one a tag was seen at
+        confirmed = (self.ekf is None
+                     or now - self.last_fix <= max(self.controller.gains.settle_time, 0.5))
+        v, w, reached = self.controller.update(
+            self.x, self.y, self.theta, dt, heading_confirmed=confirmed)
+        phase = self.controller.phase
+        if phase == WaypointController.SEARCH and self.last_phase != phase:
+            self.get_logger().info('No tag confirms the heading; searching for one')
+            self.ekf.inflate((0.0, 0.0, 1.0))  # the heading is unknown: trust the next sighting
+        self.last_phase = phase
         if reached is not None:
             wx, wy, wt = self.controller.waypoints[reached]
             self.get_logger().info(
@@ -251,10 +265,11 @@ class VelocityControlNode(Node):
         self.send(v, w)
 
     def integrate_pose(self, dt):
-        heading = self.odom[2] + self.w * dt / 2.0
-        self.odom = [self.odom[0] + self.v * math.cos(heading) * dt,
-                     self.odom[1] + self.v * math.sin(heading) * dt,
-                     wrap_angle(self.odom[2] + self.w * dt)]
+        for pose in (self.odom, self.prediction):
+            heading = pose[2] + self.w * dt / 2.0
+            pose[0] += self.v * math.cos(heading) * dt
+            pose[1] += self.v * math.sin(heading) * dt
+            pose[2] = wrap_angle(pose[2] + self.w * dt)
         if self.ekf is not None:
             w = self.w
             if self.use_imu and self.imu_yaw is not None:
@@ -282,9 +297,10 @@ class VelocityControlNode(Node):
             [f'{now - self.log_start:.2f}', f'{self.x:.4f}', f'{self.y:.4f}', f'{self.theta:.4f}',
              f'{std[0]:.4f}', f'{std[1]:.4f}', f'{std[2]:.4f}',
              self.controller.index, self.tags_seen]
-            + [f'{v:.4f}' for v in self.odom])
+            + [f'{v:.4f}' for v in (*self.odom, *self.prediction)])
         self.trajectory_file.flush()
         self.tags_seen = 0
+        self.prediction = [self.x, self.y, self.theta]
 
     def send(self, v, w):
         left, right = body_to_wheel_cmds(

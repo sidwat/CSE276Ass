@@ -63,6 +63,37 @@ def finish(ax, title):
     ax.set_title(title)
 
 
+def draw_poses(ax, poses, color, label, marker='o', line=False, arrows=True):
+    """Dots at (x, y), each with a short arrow along its heading."""
+    if not poses:
+        return
+    xs, ys, thetas = zip(*poses)
+    if line:
+        ax.plot(xs, ys, color='0.8', linewidth=1, zorder=1)
+    ax.scatter(xs, ys, s=12, color=color, marker=marker, zorder=2, label=label)
+    if arrows:
+        ax.quiver(xs, ys, [math.cos(t) for t in thetas], [math.sin(t) for t in thetas],
+                  color=color, angles='xy', scale_units='xy', scale=10, width=0.003,
+                  headwidth=4, zorder=2)  # scale=10: unit vector drawn 0.1 m long
+
+
+def unwrapped_turn(thetas):
+    return sum(wrap_angle(b - a) for a, b in zip(thetas, thetas[1:]))
+
+
+def print_turn_check(trajectory):
+    """Compare commanded rotation with the rotation the EKF (i.e. the tags) saw."""
+    commanded = unwrapped_turn([p['odom_theta'] for p in trajectory])
+    seen = unwrapped_turn([p['theta'] for p in trajectory])
+    print(f'\nNet rotation: commanded (motion model) {math.degrees(commanded):.0f} deg, '
+          f'EKF {math.degrees(seen):.0f} deg')
+    if abs(seen) > math.radians(90):
+        ratio = commanded / seen
+        print(f'The robot turns {100 / ratio:.0f}% of what is commanded. If that is far from '
+              f'100%, multiply wheel_base by {ratio:.2f} (and divide min_w and max_w by '
+              f'{ratio:.2f} to keep the same wheel commands).')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_dir', nargs='?',
@@ -98,61 +129,71 @@ def main():
     if os.path.exists(measurements_path):
         print_tag_check(read_csv(measurements_path))
 
+    if 'odom_theta' in trajectory[0]:
+        print_turn_check(trajectory)
+
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     goals = [(w['goal_x'], w['goal_y'], w['goal_theta']) for w in reached]
-    fused = ([p['x'] for p in trajectory], [p['y'] for p in trajectory])
+    fused = [(p['x'], p['y'], p['theta']) for p in trajectory]
 
     # Report figure: the EKF estimate, one dot per log_period
     fig, ax = plt.subplots(figsize=(7, 7))
     draw_map(ax, landmarks, goals)
-    ax.plot(*fused, color='0.8', linewidth=1, zorder=1)
-    ax.scatter(*fused, s=14, color='red', zorder=2, label='EKF estimate (every log_period)')
+    draw_poses(ax, fused, 'red', 'EKF estimate (every log_period)', line=True)
     finish(ax, 'Estimated trajectory')
     output = args.output or os.path.join(run_dir, 'trajectory.png')
     fig.savefig(output, dpi=150, bbox_inches='tight')
     print(f'\nWrote {output}')
 
-    # Motion model alone, sensor model alone, and the EKF that fuses them
-    has_odom = 'odom_x' in trajectory[0]
-    odom = ([p['odom_x'] for p in trajectory], [p['odom_y'] for p in trajectory]) \
-        if has_odom else ([], [])
+    # Motion model, sensor model, and the EKF that fuses them
+    odom = [(p['odom_x'], p['odom_y'], p['odom_theta']) for p in trajectory] \
+        if 'odom_x' in trajectory[0] else []
+    predicted = [(p['pred_x'], p['pred_y'], p['pred_theta']) for p in trajectory[1:]] \
+        if 'pred_x' in trajectory[0] else []
     sightings = read_csv(measurements_path) if os.path.exists(measurements_path) else []
     sightings = [m for m in sightings if int(m['tag']) in landmarks]
     for m in sightings:
         m['pose'] = pose_from_sighting(m, landmarks[int(m['tag'])])
     fig, axes = plt.subplots(2, 2, figsize=(13, 13))
-    (ax_odom, ax_sensor), (ax_fused, ax_all) = axes
+    (ax_motion, ax_sensor), (ax_fused, ax_all) = axes
     for ax in axes.ravel():
         draw_map(ax, landmarks, goals)
 
-    ax_odom.plot(*odom, color='tab:green', marker='.', markersize=5, linewidth=1)
-    finish(ax_odom, 'Motion model only (commanded velocities)'
-           if has_odom else 'Motion model: not in this log (older run)')
+    # Each prediction starts from the EKF estimate one log_period earlier; the gap between a
+    # green point and the next red one is the correction the tags made over that period.
+    ax_motion.plot([p[0] for p in fused], [p[1] for p in fused], color='red', alpha=0.25,
+                   linewidth=1, label='EKF estimate (prediction start points)')
+    for start_pose, end_pose in zip(fused, predicted):
+        ax_motion.plot([start_pose[0], end_pose[0]], [start_pose[1], end_pose[1]],
+                       color='tab:green', linewidth=0.8)
+    draw_poses(ax_motion, predicted, 'tab:green', 'motion model prediction from previous EKF')
+    if odom:
+        ax_motion.plot([p[0] for p in odom], [p[1] for p in odom], color='tab:green',
+                       linestyle=':', alpha=0.5, label='dead reckoning from origin (no tags)')
+    finish(ax_motion, 'Motion model (prediction step)' if predicted
+           else 'Motion model: not in this log (older run)')
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     for i, tag in enumerate(sorted({int(m['tag']) for m in sightings})):
         for accepted, marker in ((1, 'o'), (0, 'x')):
             rows = [m for m in sightings
                     if int(m['tag']) == tag and int(m['accepted']) == accepted]
-            if not rows:
-                continue
-            ax_sensor.scatter([m['pose'][0] for m in rows], [m['pose'][1] for m in rows],
-                              s=10, marker=marker,
-                              color=colors[i % len(colors)],
-                              label=f'tag {tag}' + ('' if accepted else ' (rejected)'))
-    finish(ax_sensor, 'Sensor model only (one dot per tag sighting)')
+            if rows:
+                draw_poses(ax_sensor, [m['pose'] for m in rows], colors[i % len(colors)],
+                           f'tag {tag}' + ('' if accepted else ' (rejected)'), marker=marker)
+    finish(ax_sensor, 'Sensor model only (pose implied by each tag sighting)')
 
-    ax_fused.plot(*fused, color='0.8', linewidth=1, zorder=1)
-    ax_fused.scatter(*fused, s=14, color='red', zorder=2)
+    draw_poses(ax_fused, fused, 'red', 'EKF estimate', line=True)
     finish(ax_fused, 'EKF: motion and sensor models fused')
 
-    ax_all.plot(*odom, color='tab:green', linewidth=1.5, label='motion model')
+    draw_poses(ax_all, predicted, 'tab:green', 'motion model prediction', arrows=False)
     ax_all.scatter([m['pose'][0] for m in sightings], [m['pose'][1] for m in sightings],
                    s=6, color='tab:blue', alpha=0.4, label='sensor model')
-    ax_all.plot(*fused, color='red', linewidth=2, label='EKF')
+    ax_all.plot([p[0] for p in fused], [p[1] for p in fused], color='red', linewidth=2,
+                label='EKF')
     finish(ax_all, 'All three')
 
     output = os.path.join(run_dir, 'models.png')

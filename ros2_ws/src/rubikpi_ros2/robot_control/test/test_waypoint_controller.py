@@ -63,3 +63,34 @@ def test_settle_waits_and_turns_again_if_the_heading_is_corrected():
         if reached is not None:
             break
     assert reached == 0 and controller.done
+
+
+def test_unconfirmed_heading_searches_in_the_last_turn_direction_until_a_tag_is_seen():
+    gains = Gains(heading_tolerance=0.05, settle_time=0.5, min_w=1.0,
+                  search_turn_time=0.3, search_look_time=1.0)
+    controller = WaypointController([(0.0, 0.0, 1.0)], gains)
+    assert controller.update(0.0, 0.0, 0.0, dt=0.1, heading_confirmed=False)[1] > 0  # turn left
+    for _ in range(10):  # the estimate says it got there, but no tag has confirmed it
+        _, w, reached = controller.update(0.0, 0.0, 1.0, dt=0.1, heading_confirmed=False)
+        assert reached is None
+        if controller.phase == WaypointController.SEARCH:
+            break
+    assert controller.phase == WaypointController.SEARCH
+    assert w > 0  # keeps turning left, the way it was turning
+
+    # A tag is seen: the corrected estimate is checked again, then the waypoint counts
+    for _ in range(10):
+        _, _, reached = controller.update(0.0, 0.0, 1.0, dt=0.1, heading_confirmed=True)
+        if reached is not None:
+            break
+    assert reached == 0
+
+
+def test_near_the_waypoint_it_drives_straight_instead_of_turning_around():
+    controller = WaypointController([(1.0, 0.0, 0.0)], Gains(pos_tolerance=0.03))
+    controller.phase = WaypointController.DRIVE
+    # A correction puts the estimate 4 cm short and 4 cm to the side: no turn in place
+    v, w, _ = controller.update(0.96, 0.04, 0.0)
+    assert v > 0 and w == 0.0
+    # Once it is no longer ahead, the 4 cm sideways error is accepted (heading already right)
+    assert controller.update(1.0, 0.04, 0.0) == (0.0, 0.0, 0)
