@@ -19,7 +19,7 @@ velocity_control_node:
     log_dir: ~/hw2_logs
     log_period: 0.5         # s, one dot per log_period in the trajectory plot
 
-    pause_at_waypoint: 1.5  # s, also lets the camera settle and correct the pose
+    pause_at_waypoint: 0.5  # s, after settle_time
     start_delay: 5.0        # s, camera and apriltag_node need a few seconds to come up
     control_rate: 20.0      # Hz
     max_wheel_cmd: 0.5
@@ -30,6 +30,8 @@ velocity_control_node:
     pos_tolerance: 0.03     # m
     heading_tolerance: 0.05 # rad, the faster turns below cannot stop within 0.03
     replan_distance: 0.1    # m
+    settle_time: 1.0        # s stopped at each final heading for the camera to confirm it; the
+                            # robot turns again if the heading is then off by > 2 * heading_tolerance
     k_v: 1.26
     k_w: 1.26
     max_v: 0.25             # m/s, slower than HW1 so camera frames are not motion-blurred
@@ -38,7 +40,10 @@ velocity_control_node:
     # place needs far more torque than driving straight, so max_w starts the turn hard enough to
     # break static friction and min_w keeps it from stalling just short of the target.
     max_w: 1.8              # rad/s -> wheel command 0.49, just under motor_control's 0.5 clip
-    min_w: 0.9              # rad/s -> wheel command 0.24; raise if turns stop short
+    # min_w is the floor of the proportional turn command, so the end of every turn and every
+    # small correction runs at min_w: it must be above the command that starts the robot turning
+    # from a standstill (0.22 did not; 0.34 did in HW1).
+    min_w: 1.3              # rad/s -> wheel command 0.35
     realign_angle: 0.5      # rad
 
     # --- EKF noise (see robot_control/localization.py) ---

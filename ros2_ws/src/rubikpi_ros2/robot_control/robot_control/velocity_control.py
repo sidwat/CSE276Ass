@@ -233,7 +233,7 @@ class VelocityControlNode(Node):
             self.send(0.0, 0.0)
             return
 
-        v, w, reached = self.controller.update(self.x, self.y, self.theta)
+        v, w, reached = self.controller.update(self.x, self.y, self.theta, dt)
         if reached is not None:
             wx, wy, wt = self.controller.waypoints[reached]
             self.get_logger().info(

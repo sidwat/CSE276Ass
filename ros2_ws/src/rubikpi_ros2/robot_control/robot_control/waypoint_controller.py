@@ -64,6 +64,7 @@ class Gains:
     min_w: float = 0.4               # rad/s, below this the motors stall
     realign_angle: float = 0.5       # rad, stop and turn in place if heading drifts this far
     replan_distance: float = 0.1     # m, drive back if a correction puts the waypoint this far off
+    settle_time: float = 0.0         # s to stop and re-check the heading before a waypoint counts
 
 
 class WaypointController:
@@ -71,26 +72,28 @@ class WaypointController:
     Drive to each waypoint in turn: rotate to face it, drive to it, rotate to its heading.
 
     Call update() with the current pose estimate every control cycle; it returns the body
-    velocity command to apply.
+    velocity command to apply. settle_time needs update()'s dt to count time.
     """
 
     ROTATE_TO_TARGET = 'rotate_to_target'
     DRIVE = 'drive'
     ROTATE_TO_HEADING = 'rotate_to_heading'
+    SETTLE = 'settle'
 
     def __init__(self, waypoints, gains=None):
         self.waypoints = list(waypoints)
         self.gains = gains or Gains()
         self.index = 0
         self.phase = self.ROTATE_TO_TARGET
+        self.settle_time = 0.0  # s spent stopped in SETTLE
 
     @property
     def done(self):
         return self.index >= len(self.waypoints)
 
-    def update(self, x, y, theta):
+    def update(self, x, y, theta, dt=0.0):
         """
-        Return (v, w, reached) for the pose (x, y, theta).
+        Return (v, w, reached) for the pose (x, y, theta), dt seconds after the previous call.
 
         reached is the index of the waypoint that was completed on this call, otherwise None.
         """
@@ -119,17 +122,31 @@ class WaypointController:
                     w = clamp(g.k_w * bearing_err, -g.max_w, g.max_w)
                     return v, w, None
 
-            else:  # ROTATE_TO_HEADING
+            elif self.phase == self.ROTATE_TO_HEADING:
                 if dist > g.replan_distance:
                     self.phase = self.ROTATE_TO_TARGET
                     continue
                 heading_err = wrap_angle(goal_theta - theta)
                 if abs(heading_err) < g.heading_tolerance:
+                    self.phase = self.SETTLE
+                    self.settle_time = 0.0
+                    continue
+                return 0.0, self._turn_rate(heading_err), None
+
+            else:  # SETTLE: stopped, waiting for the camera to confirm the heading
+                if dist > g.replan_distance:
+                    self.phase = self.ROTATE_TO_TARGET
+                    continue
+                if abs(wrap_angle(goal_theta - theta)) > 2.0 * g.heading_tolerance:
+                    self.phase = self.ROTATE_TO_HEADING
+                    continue
+                self.settle_time += dt
+                if self.settle_time >= g.settle_time:
                     reached = self.index
                     self.index += 1
                     self.phase = self.ROTATE_TO_TARGET
                     return 0.0, 0.0, reached
-                return 0.0, self._turn_rate(heading_err), None
+                return 0.0, 0.0, None
 
         return 0.0, 0.0, None
 

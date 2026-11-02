@@ -3,7 +3,7 @@ import os
 
 import pytest
 from robot_control.waypoint_controller import (
-    body_to_wheel_cmds, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
+    body_to_wheel_cmds, Gains, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
 
 WAYPOINTS_FILE = os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.txt')
 
@@ -47,3 +47,19 @@ def test_wheel_conversion_round_trips_and_saturates_proportionally():
     left, right = body_to_wheel_cmds(1.0, 2.0, speed_per_unit=1.0, wheel_base=0.2, max_cmd=0.5)
     assert max(abs(left), abs(right)) == pytest.approx(0.5)
     assert right / left == pytest.approx(1.2 / 0.8)  # turning radius preserved
+
+
+def test_settle_waits_and_turns_again_if_the_heading_is_corrected():
+    gains = Gains(heading_tolerance=0.05, settle_time=1.0)
+    controller = WaypointController([(0.0, 0.0, 0.0)], gains)
+    assert controller.update(0.0, 0.0, 0.01, dt=0.1) == (0.0, 0.0, None)  # settling, not done
+    assert controller.phase == WaypointController.SETTLE
+
+    v, w, reached = controller.update(0.0, 0.0, 0.3, dt=0.1)  # camera: still 0.3 rad off
+    assert reached is None and v == 0.0 and w < 0.0  # turns back
+
+    for _ in range(30):
+        _, _, reached = controller.update(0.0, 0.0, 0.0, dt=0.1)
+        if reached is not None:
+            break
+    assert reached == 0 and controller.done
