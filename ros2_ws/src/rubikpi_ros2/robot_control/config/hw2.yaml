@@ -1,0 +1,65 @@
+# Parameters for velocity_control in HW2 (closed loop with AprilTags), see launch/hw2_launch.py.
+# Motion calibration is copied from velocity_control.yaml (HW1); keep the two in sync.
+velocity_control_node:
+  ros__parameters:
+    speed_per_unit: 1.26
+    wheel_base: 0.68
+    wheel_trim: -0.06
+
+    use_vision: true
+    camera_frame: camera_frame
+    camera_x: 0.1           # m, camera lens ahead of the point the robot turns about: MEASURE THIS
+    camera_y: 0.0           # m, camera left of that point
+    camera_yaw: 0.0         # rad
+    camera_upside_down: false  # true if the camera image is rotated 180 degrees (see measurements.csv)
+    max_tag_range: 3.0      # m
+    relocalize_after: 8     # rejected sightings in a row before trusting the tags over odometry
+    use_imu: false          # true: predict heading from the IMU yaw, so a stalled turn is noticed
+    imu_yaw_sign: 1.0       # -1.0 if the IMU yaw decreases when the robot turns left (CCW)
+    log_dir: ~/hw2_logs
+    log_period: 0.5         # s, one dot per log_period in the trajectory plot
+
+    pause_at_waypoint: 0.5  # s, after settle_time
+    start_delay: 5.0        # s, camera and apriltag_node need a few seconds to come up
+    control_rate: 20.0      # Hz
+    max_wheel_cmd: 0.5
+
+    # --- Controller gains / limits ---
+    # Tolerances are looser than HW1: the estimate now has a few cm of camera noise, and a
+    # tolerance below that makes the robot hunt back and forth at each waypoint.
+    pos_tolerance: 0.03     # m
+    heading_tolerance: 0.1 # rad, the faster turns below cannot stop within 0.03
+    replan_distance: 0.1    # m: inside this the robot never turns to face the waypoint
+    settle_time: 1.0        # s stopped at each final heading for the camera to confirm it; the
+                            # robot turns again if the heading is then off by > 2 * heading_tolerance
+    # If no tag was seen during the settle, the heading is only the motion model's claim (which
+    # over-claims on this robot), so it turns on in the same direction a step at a time, stopping
+    # to look after each step, until a tag confirms where it is.
+    search_turn_time: 0.3   # s per step (about 20 deg at min_w)
+    search_look_time: 1.0   # s stopped to look after each step
+    search_max_turn: 6.3    # rad of searching before accepting the estimate anyway
+    k_v: 1.26
+    k_w: 1.26
+    max_v: 0.25             # m/s, slower than HW1 so camera frames are not motion-blurred
+    min_v: 0.05             # m/s
+    # An in-place turn sends each wheel 0.27 * w (wheel_base / 2 / speed_per_unit). Turning in
+    # place needs far more torque than driving straight, so max_w starts the turn hard enough to
+    # break static friction and min_w keeps it from stalling just short of the target.
+    max_w: 1.6              # rad/s -> wheel command 0.49, just under motor_control's 0.5 clip
+    # min_w is the floor of the proportional turn command, so the end of every turn and every
+    # small correction runs at min_w: it must be above the command that starts the robot turning
+    # from a standstill (0.22 did not; 0.34 did in HW1).
+    min_w: 1.1              # rad/s -> wheel command 0.35
+    realign_angle: 0.5      # rad
+
+    # --- EKF noise (see robot_control/localization.py) ---
+    odom_dist_std: 0.1      # m of error after driving 1 m
+    # Commanded in-place turns are unreliable (the wheels can stall), so rotation is trusted
+    # little and the camera decides how far the robot has actually turned.
+    odom_turn_std: 0.5      # rad of error after turning 1 rad
+    odom_drift_std: 0.05    # rad of heading drift after driving 1 m
+    range_std: 0.02         # m
+    range_std_per_m: 0.03
+    bearing_std: 0.02       # rad
+    orientation_std: 0.15   # rad
+    gate: 11.34             # Mahalanobis^2 outlier cutoff

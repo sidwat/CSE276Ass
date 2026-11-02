@@ -1,5 +1,8 @@
 %YAML:1.0
 ---
+# From ros2 run camera_calibration cameracalibrator --size 9x6 --square 0.084 (48 samples, 1280x720).
+# projection_matrix must equal getOptimalNewCameraMatrix(K, D, size, alpha=0): the camera node
+# undistorts to that matrix when image_rectify:=true, and apriltag_node reads its intrinsics from P.
 image_width: 1280
 image_height: 720
 camera_name: camera
@@ -8,8 +11,8 @@ camera_matrix: !!opencv-matrix
   rows: 3
   cols: 3
   dt: d
-  data: [490.980065, 1.448770, 639.427696,
-         0.0, 492.132778, 357.232355,
+  data: [635.458681, 0.0, 648.015424,
+         0.0, 637.355085, 338.988925,
          0.0, 0.0, 1.0]
 
 distortion_model: plumb_bob
@@ -17,7 +20,7 @@ distortion_coefficients: !!opencv-matrix
   rows: 1
   cols: 5
   dt: d
-  data: [0.487826, -1.851282, 1.209359, -0.068021, 0.0]
+  data: [-0.309449, 0.077783, 0.000632, 0.000168, 0.0]
 
 rectification_matrix: !!opencv-matrix
   rows: 3
@@ -31,6 +34,6 @@ projection_matrix: !!opencv-matrix
   rows: 3
   cols: 4
   dt: d
-  data: [490.980065, 1.448770, 639.427696, 0.0,
-         0.0, 492.132778, 357.232355, 0.0,
+  data: [459.128265, 0.0, 646.756742, 0.0,
+         0.0, 563.842041, 333.090380, 0.0,
          0.0, 0.0, 1.0, 0.0]
