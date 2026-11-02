@@ -1,22 +1,25 @@
 # AprilTag IDs, sizes, family and TF names belong ONLY in apriltag_ros/cfg/tags_36h11.yaml.
 reviewed: false
 base_camera:
-  xyz: null  # camera optical origin in robot base coordinates, metres
-  rpy: null  # camera optical orientation in robot base coordinates, radians
+  xyz: [0.1, 0.0, 0.12]  # camera optical origin in robot base coordinates, metres (x measured; z = camera height from landmarks.txt)
+  rpy: [-1.5708, 0.0, -1.5708]  # level, forward-facing optical frame (z forward, x right, y down)
 # Previous motion calibration: recheck on the actual robot/floor.
 motion: {speed_per_unit: 1.26, wheel_base: 0.68, wheel_trim: -0.06, max_cmd: 0.25}
 waypoints: [[0, 0, 0], [1, 0, 0], [1, 2, 3.141592653589793], [0, 0, 0]]
 # Key = printed tag ID. Values = surveyed WORLD pose of its centre, metres/radians.
 # Unsurveyed tags are ignored. Fill only tags you actually place and enable in AprilTag YAML.
 tags:
-  0: {xyz: null, rpy: null}
-  1: {xyz: null, rpy: null}
+# Generated from robot_control/config/landmarks.txt (x, y, face-normal yaw psi), tag centre at z = 0.12.
+# landmarks.txt is the source (velocity_control reads it); edit it there, then regenerate this.
+# Tag frame (apriltag_ros pnp): x right, y up, z out of the face. Upright tag: rpy = [pi/2, 0, psi + pi/2].
+  0: {xyz: [2.4, 0, 0.12], rpy: [1.5708, 0.0, -1.5708]}       # psi = 3.14159
+  1: {xyz: [1, 2.8, 0.12], rpy: [1.5708, 0.0, 0.0]}           # psi = -1.5708
   2: {xyz: null, rpy: null}
-  3: {xyz: null, rpy: null}
-  4: {xyz: null, rpy: null}
-  5: {xyz: null, rpy: null}
+  3: {xyz: [0, 2, 0.12], rpy: [1.5708, 0.0, 1.5708]}          # psi = 0
+  4: {xyz: [-0.63, 0.39, 0.12], rpy: [1.5708, 0.0, 1.0165]}   # psi = -0.5543
+  5: {xyz: [-0.24, -0.44, 0.12], rpy: [1.5708, 0.0, 2.6422]}  # psi = 1.0714
   6: {xyz: null, rpy: null}
-  7: {xyz: null, rpy: null}
+  7: {xyz: [2.4, 1, 0.12], rpy: [1.5708, 0.0, -1.5708]}       # psi = 3.14159
   8: {xyz: null, rpy: null}
   9: {xyz: null, rpy: null}
 # Filter/vision/control tuning uses defaults in configuration.py; override only when needed.

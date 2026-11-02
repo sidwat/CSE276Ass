@@ -36,6 +36,7 @@ def test_empty_map_still_refuses_motion(tmp_path):
     cfg = yaml.safe_load(EXPERIMENT.read_text())
     cfg['reviewed'] = True
     cfg['base_camera'] = {'xyz': [0, 0, 0], 'rpy': [0, 0, 0]}
+    cfg['tags'] = {}
     file = tmp_path/'experiment.yaml'
     file.write_text(yaml.safe_dump(cfg))
     with pytest.raises(ValueError, match='surveyed tag map'):
