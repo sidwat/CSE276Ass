@@ -1,0 +1,19 @@
+# HW3 square path, side n = 4 ft (1.2192 m), 3 laps: x [m], y [m], theta [rad], relative to
+# the start pose (the square's south-west corner, facing east, i.e. world (0.914, 0.914, 0)
+# when the square is centred in the 10 ft arena). 4 waypoints per lap; at each corner the
+# robot turns 90 deg left to face the next leg, so it faces all four walls every lap.
+# lap 0
+1.2192,0,1.5708
+1.2192,1.2192,3.1416
+0,1.2192,-1.5708
+0,0,0
+# lap 1
+1.2192,0,1.5708
+1.2192,1.2192,3.1416
+0,1.2192,-1.5708
+0,0,0
+# lap 2
+1.2192,0,1.5708
+1.2192,1.2192,3.1416
+0,1.2192,-1.5708
+0,0,0

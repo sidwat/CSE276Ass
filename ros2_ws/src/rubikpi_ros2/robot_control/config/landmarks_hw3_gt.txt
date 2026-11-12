@@ -1,0 +1,17 @@
+# HW3 GROUND TRUTH, used ONLY by evaluate_slam / simulate_slam. The SLAM filter never reads it.
+# TEMPLATE: nominal positions for a 10 ft (3.048 m) arena with two tags per wall at 1/3 and 2/3
+# of its length. Replace the ids with the tags you actually printed and every x, y, yaw with
+# tape-measured values (+-1 cm) of the tag centres.
+#
+# World frame: origin at the south-west corner of the arena, x east, y north.
+#   id, x [m], y [m], yaw [rad]   (yaw = direction the printed face points, into the arena)
+# Ids are deliberately not 0..7 in order: the filter does not know how many tags there are.
+# Every id must be listed in apriltag_ros/cfg/tags_36h11.yaml (tag.ids), or the detector drops it.
+1,  1.016, 0.000,  1.5708    # S1  south wall
+3,  2.032, 0.000,  1.5708    # S2
+5,  3.048, 1.016,  3.1416    # E1  east wall
+7,  3.048, 2.032,  3.1416    # E2
+11, 2.032, 3.048, -1.5708    # N1  north wall
+13, 1.016, 3.048, -1.5708    # N2
+4,  0.000, 2.032,  0.0       # W1  west wall
+0,  0.000, 1.016,  0.0       # W2
