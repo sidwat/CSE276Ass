@@ -139,7 +139,8 @@ class PoseEKF:
         if stamp is not None:
             self.history.append((stamp, self.mu.copy()))
 
-    def _pose_at(self, stamp):
+    def pose_at(self, stamp):
+        """Return the estimate at an earlier time (latest pose at or before stamp)."""
         if stamp is None:
             return self.mu
         for t, mu in reversed(self.history):
@@ -155,7 +156,7 @@ class PoseEKF:
         more than the gate are rejected as outliers, unless force is set (re-localization).
         """
         n = self.noise
-        pose = self._pose_at(stamp)
+        pose = self.pose_at(stamp)
         dx, dy = landmark[0] - pose[0], landmark[1] - pose[1]
         q = dx * dx + dy * dy
         r = math.sqrt(q)

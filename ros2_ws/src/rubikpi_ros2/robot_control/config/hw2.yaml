@@ -17,7 +17,6 @@ velocity_control_node:
     use_imu: false          # true: predict heading from the IMU yaw, so a stalled turn is noticed
     imu_yaw_sign: 1.0       # -1.0 if the IMU yaw decreases when the robot turns left (CCW)
     log_dir: ~/hw2_logs
-    log_period: 0.5         # s, one dot per log_period in the trajectory plot
 
     pause_at_waypoint: 0.5  # s, after settle_time
     start_delay: 5.0        # s, camera and apriltag_node need a few seconds to come up

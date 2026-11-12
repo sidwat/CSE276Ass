@@ -5,8 +5,6 @@ Needs camera_node and apriltag_node running. Prints, per tag and pooled, the mea
 standard deviation of range, bearing and tag orientation (measured - expected) and of the pose
 each sighting implies by itself, and writes samples.csv, summary.csv and static_check.png to
 --output. Use --pose X Y THETA when the robot stands somewhere else, e.g. on a waypoint mark.
-If apriltag_node ran with a wrong tag size, pass --size-used and --size-actual: PnP translation
-scales linearly with the tag size, so the samples are rescaled by actual/used.
 """
 
 import argparse
@@ -28,10 +26,10 @@ CONFIG = config_dir()
 
 
 class Collector(Node):
-    def __init__(self, landmarks, camera_pose, camera_frame, scale, upside_down=False):
+    def __init__(self, landmarks, camera_pose, camera_frame, upside_down=False):
         super().__init__('static_check')
         self.landmarks, self.camera_pose, self.upside_down = landmarks, camera_pose, upside_down
-        self.camera_frame, self.scale = camera_frame, scale
+        self.camera_frame = camera_frame
         self.samples = []
         self.create_subscription(TFMessage, '/tf', self.on_tf, 100)
 
@@ -46,7 +44,7 @@ class Collector(Node):
             t, q = tf.transform.translation, tf.transform.rotation
             normal = (2.0 * (q.x * q.z + q.w * q.y), 2.0 * (q.y * q.z - q.w * q.x),
                       1.0 - 2.0 * (q.x * q.x + q.y * q.y))
-            translation = (t.x * self.scale, t.y * self.scale, t.z * self.scale)
+            translation = (t.x, t.y, t.z)
             z = tag_measurement(translation, normal, self.camera_pose, self.upside_down)
             pose = pose_from_measurement(z, self.landmarks[tag_id])
             self.samples.append((time.monotonic(), tag_id, *z, *pose, *translation))
@@ -78,8 +76,6 @@ def main():
     parser.add_argument('--landmarks', default=str(CONFIG / 'landmarks.txt'))
     parser.add_argument('--params', default=str(CONFIG / 'hw2.yaml'))
     parser.add_argument('--duration', type=float, default=20.0, help='seconds to collect')
-    parser.add_argument('--size-used', type=float, help='tag size apriltag_node is running with')
-    parser.add_argument('--size-actual', type=float, help='true printed tag size')
     parser.add_argument('--pose', type=float, nargs=3, default=[0.0, 0.0, 0.0],
                         metavar=('X', 'Y', 'THETA'), help='true robot pose (m, m, rad)')
     parser.add_argument('--output', default='static_check')
@@ -90,15 +86,13 @@ def main():
     with open(args.params) as f:
         p = yaml.safe_load(f)['velocity_control_node']['ros__parameters']
     camera_pose = tuple(float(p.get(k, 0.0)) for k in ('camera_x', 'camera_y', 'camera_yaw'))
-    scale = args.size_actual / args.size_used if args.size_used and args.size_actual else 1.0
     landmarks = load_landmarks(args.landmarks)
 
     rclpy.init()
-    node = Collector(landmarks, camera_pose, p.get('camera_frame', 'camera_frame'), scale,
+    node = Collector(landmarks, camera_pose, p.get('camera_frame', 'camera_frame'),
                      bool(p.get('camera_upside_down', False)))
     end = time.monotonic() + args.duration
-    print(f'Collecting for {args.duration:.0f} s (translation scale {scale:.4f}); '
-          'do not move the robot')
+    print(f'Collecting for {args.duration:.0f} s; do not move the robot')
     while time.monotonic() < end and rclpy.ok():
         rclpy.spin_once(node, timeout_sec=0.1)
     node.destroy_node()

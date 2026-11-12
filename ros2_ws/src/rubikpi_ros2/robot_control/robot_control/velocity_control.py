@@ -61,8 +61,8 @@ class VelocityControlNode(Node):
         self.declare_parameter('camera_upside_down', False)  # image rotated 180 degrees
         self.declare_parameter('max_tag_range', 3.0)   # m, ignore tags farther than this
         self.declare_parameter('relocalize_after', 15)  # rejections in a row before forcing one
-        self.declare_parameter('log_dir', '')          # write trajectory/waypoint CSVs under here
-        self.declare_parameter('log_period', 0.5)      # s between trajectory samples
+        self.declare_parameter('log_dir', '')          # write each run's CSVs and plots under here
+        self.declare_parameter('run_name', '')         # run folder name; default run_<time>
         defaults = Gains()
         for name, value in vars(defaults).items():
             self.declare_parameter(name, value)
@@ -104,7 +104,6 @@ class VelocityControlNode(Node):
             self.create_subscription(Imu, 'imu_data', self.imu_callback, 10)
 
         self.ekf = None
-        self.tags_seen = 0
         self.rejected_in_row = 0
         if self.use_vision:
             self.setup_vision(noise_defaults)
@@ -122,7 +121,7 @@ class VelocityControlNode(Node):
         for i, (wx, wy, wt) in enumerate(waypoints):
             self.get_logger().info(f'  [{i}] x={wx:.2f} y={wy:.2f} theta={wt:.2f}')
 
-        self.trajectory_log = self.waypoint_log = self.measurement_log = self.tick_log = None
+        self.waypoint_log = self.measurement_log = self.tick_log = None
         self.run_dir = None
         log_dir = self.get_parameter('log_dir').value
         if log_dir:
@@ -149,10 +148,12 @@ class VelocityControlNode(Node):
             self.get_logger().info(f'  tag {tag_id}: x={lx:.2f} y={ly:.2f} yaw={lyaw:.2f}')
 
     def setup_logs(self, log_dir):
-        run_dir = os.path.join(log_dir, time.strftime('run_%Y%m%d_%H%M%S'))
+        run_name = self.get_parameter('run_name').value or time.strftime('run_%Y%m%d_%H%M%S')
+        run_dir = os.path.join(log_dir, run_name)
         os.makedirs(run_dir, exist_ok=True)
         self.run_dir = run_dir
         shutil.copy(self.waypoints_file, os.path.join(run_dir, 'waypoints.txt'))
+        self.save_config(run_dir)
         # One row per control tick. corr_* is the EKF state after every sighting fused since the
         # previous tick; model_* is the motion model applied to it with the last command (the
         # pose the controller then acts on); vision_* is the pose the last of those sightings
@@ -162,14 +163,10 @@ class VelocityControlNode(Node):
         self.tick_log.writerow(
             ['t', 'dt', 'waypoint', 'mode', 'corr_x', 'corr_y', 'corr_theta',
              'std_x', 'std_y', 'std_theta', 'model_x', 'model_y', 'model_theta',
+             'model_std_x', 'model_std_y', 'model_std_theta',
              'odom_x', 'odom_y', 'odom_theta', 'n_accepted', 'n_rejected', 'vision_tag',
              'vision_x', 'vision_y', 'vision_theta', 'vision_accepted',
              'v_cmd', 'w_cmd', 'v', 'w', 'left', 'right'])
-        self.trajectory_file = open(os.path.join(run_dir, 'trajectory.csv'), 'w', newline='')
-        self.trajectory_log = csv.writer(self.trajectory_file)
-        self.trajectory_log.writerow(
-            ['t', 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta', 'waypoint', 'tags_seen',
-             'odom_x', 'odom_y', 'odom_theta'])
         self.waypoint_file = open(os.path.join(run_dir, 'waypoints.csv'), 'w', newline='')
         self.waypoint_log = csv.writer(self.waypoint_file)
         self.waypoint_log.writerow(
@@ -180,14 +177,34 @@ class VelocityControlNode(Node):
             self.measurement_file = open(
                 os.path.join(run_dir, 'measurements.csv'), 'w', newline='')
             self.measurement_log = csv.writer(self.measurement_file)
+            # status: accepted / rejected / forced (re-localization) / out_of_range (ignored).
+            # img_* is the estimate at the image time, which the innovation is computed
+            # against; x/y/theta and post_* are the current estimate before and after.
             self.measurement_log.writerow(
-                ['t', 'tag', 'range', 'bearing', 'orientation', 'exp_range', 'exp_bearing',
-                 'exp_orientation', 'x', 'y', 'theta', 'accepted', 'mahalanobis2',
+                ['t', 'stamp', 'latency', 'tag', 'status', 'accepted', 'mahalanobis2',
+                 'cam_x', 'cam_y', 'cam_z', 'normal_x', 'normal_y', 'normal_z',
+                 'range', 'bearing', 'orientation', 'img_x', 'img_y', 'img_theta',
+                 'exp_range', 'exp_bearing', 'exp_orientation',
+                 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta',
+                 'post_x', 'post_y', 'post_theta', 'post_std_x', 'post_std_y', 'post_std_theta',
                  'vision_x', 'vision_y', 'vision_theta'])
-        self.log_period = float(self.get_parameter('log_period').value)
         self.log_start = time.monotonic()
-        self.last_log = -math.inf
         self.get_logger().info(f'Logging to {run_dir}')
+
+    def save_config(self, run_dir):
+        """Store every parameter and the config files this run used, next to its logs."""
+        import yaml
+        names = self.list_parameters([], 0).names
+        params = {p.name: p.value for p in self.get_parameters(names)}
+        with open(os.path.join(run_dir, 'params.yaml'), 'w') as f:
+            yaml.safe_dump({'velocity_control_node': {'ros__parameters': params}}, f)
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            for package, path in (('apriltag_ros', 'cfg/tags_36h11.yaml'),
+                                  ('robot_vision_camera', 'config/camera_parameter.yaml')):
+                shutil.copy(os.path.join(get_package_share_directory(package), path), run_dir)
+        except Exception as e:  # informative only: never stop a run for it
+            self.get_logger().warn(f'Could not copy the detector/camera config: {e}')
 
     def imu_callback(self, msg):
         q = msg.orientation
@@ -209,30 +226,36 @@ class VelocityControlNode(Node):
                       1.0 - 2.0 * (q.x * q.x + q.y * q.y))  # tag z axis in the camera frame
             measurement = tag_measurement(
                 (t.x, t.y, t.z), normal, self.camera_pose, self.camera_upside_down)
-            if measurement[0] > self.max_tag_range:
-                continue
-
             stamp = Time.from_msg(tf.header.stamp).nanoseconds * 1e-9
-            force = self.rejected_in_row >= self.relocalize_after
-            if force:
-                self.get_logger().warn(f'{self.rejected_in_row} sightings rejected in a row; '
-                                       f're-localizing on tag {tag_id}')
-                self.ekf.inflate((0.3, 0.3, 0.3))
-            pose = self.ekf.pose
-            accepted, distance = self.ekf.correct(
-                measurement, self.landmarks[tag_id], stamp, force=force)
-            vision = pose_from_measurement(measurement, self.landmarks[tag_id])
-            self.tick_sightings.append((tag_id, vision, accepted))
+            landmark = self.landmarks[tag_id]
+            vision = pose_from_measurement(measurement, landmark)
+            at_image = tuple(float(v) for v in self.ekf.pose_at(stamp))
+            pose, std = self.ekf.pose, self.ekf.std
+            if measurement[0] > self.max_tag_range:
+                status, accepted, distance = 'out_of_range', False, math.nan
+            else:
+                force = self.rejected_in_row >= self.relocalize_after
+                if force:
+                    self.get_logger().warn(f'{self.rejected_in_row} sightings rejected in a '
+                                           f'row; re-localizing on tag {tag_id}')
+                    self.ekf.inflate((0.3, 0.3, 0.3))
+                accepted, distance = self.ekf.correct(measurement, landmark, stamp, force=force)
+                status = ('forced' if force else 'accepted') if accepted else 'rejected'
+                self.tick_sightings.append((tag_id, vision, accepted))
             if self.measurement_log:
-                expected = expected_measurement(pose, self.landmarks[tag_id])
+                now = self.get_clock().now().nanoseconds * 1e-9
+                expected = expected_measurement(at_image, landmark)
                 self.measurement_log.writerow(
-                    [f'{time.monotonic() - self.log_start:.2f}', tag_id]
-                    + [f'{v:.4f}' for v in (*measurement, *expected, *pose)]
-                    + [int(accepted), f'{distance:.1f}']
-                    + [f'{v:.4f}' for v in vision])
+                    [f'{time.monotonic() - self.log_start:.3f}', f'{stamp:.3f}',
+                     f'{now - stamp:.3f}', tag_id, status, int(accepted), f'{distance:.2f}']
+                    + [f'{v:.4f}' for v in (t.x, t.y, t.z, *normal, *measurement, *at_image,
+                                            *expected, *pose, *std, *self.ekf.pose,
+                                            *self.ekf.std, *vision)])
+                self.measurement_file.flush()
+            if status == 'out_of_range':
+                continue
             if accepted:
                 self.rejected_in_row = 0
-                self.tags_seen += 1
             else:
                 self.rejected_in_row += 1
                 self.get_logger().info(
@@ -250,7 +273,6 @@ class VelocityControlNode(Node):
         else:
             corrected, corrected_std = (self.x, self.y, self.theta), (0.0, 0.0, 0.0)
         self.integrate_pose(dt)
-        self.log_trajectory(now)
 
         v = w = 0.0
         if now < self.hold_until or self.finished:
@@ -301,23 +323,11 @@ class VelocityControlNode(Node):
         self.x += self.v * math.cos(heading) * dt
         self.y += self.v * math.sin(heading) * dt
 
-    def log_trajectory(self, now):
-        if not self.trajectory_log or now - self.last_log < self.log_period:
-            return
-        self.last_log = now
-        std = self.ekf.std if self.ekf is not None else (0.0, 0.0, 0.0)
-        self.trajectory_log.writerow(
-            [f'{now - self.log_start:.2f}', f'{self.x:.4f}', f'{self.y:.4f}', f'{self.theta:.4f}',
-             f'{std[0]:.4f}', f'{std[1]:.4f}', f'{std[2]:.4f}',
-             self.controller.index, self.tags_seen,
-             f'{self.odom[0]:.4f}', f'{self.odom[1]:.4f}', f'{self.odom[2]:.4f}'])
-        self.trajectory_file.flush()
-        self.tags_seen = 0
-
     def log_tick(self, now, dt, mode, corrected, corrected_std, v_cmd, w_cmd):
         sightings, self.tick_sightings = self.tick_sightings, []
         if not self.tick_log:
             return
+        model_std = self.ekf.std if self.ekf is not None else (0.0, 0.0, 0.0)
         accepted = sum(1 for s in sightings if s[2])
         if sightings:
             tag_id, vision, ok = sightings[-1]
@@ -327,7 +337,7 @@ class VelocityControlNode(Node):
         self.tick_log.writerow(
             [f'{now - self.log_start:.3f}', f'{dt:.4f}', self.controller.index, mode]
             + [f'{v:.4f}' for v in (*corrected, *corrected_std, self.x, self.y, self.theta,
-                                    *self.odom)]
+                                    *model_std, *self.odom)]
             + [accepted, len(sightings) - accepted] + vision_cols
             + [f'{v:.4f}' for v in (v_cmd, w_cmd, self.v, self.w,
                                     self.left_sent, self.right_sent)])
@@ -351,8 +361,7 @@ class VelocityControlNode(Node):
             self.send(0.0, 0.0)
         except Exception:
             pass
-        if self.trajectory_log:
-            self.trajectory_file.close()
+        if self.waypoint_log:
             self.waypoint_file.close()
         if self.measurement_log:
             self.measurement_file.close()

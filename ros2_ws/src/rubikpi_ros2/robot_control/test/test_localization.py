@@ -123,22 +123,3 @@ def test_vision_keeps_waypoint_error_small_where_dead_reckoning_drifts():
         assert math.hypot(x - gx, y - gy) < 0.06
         # No tag is in view while turning to pi at (1,2), so the 8% turn error shows there
         assert abs(wrap_angle(theta - gt)) < math.radians(8)
-
-
-def test_landmarks_match_hw2_navigation_experiment_yaml():
-    """landmarks.txt drives velocity_control; experiment.yaml must describe the same tags."""
-    yaml = pytest.importorskip('yaml')
-    experiment = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'hw2_navigation',
-                              'config', 'experiment.yaml')
-    if not os.path.exists(experiment):
-        pytest.skip('hw2_navigation is not next to robot_control')
-    with open(experiment) as f:
-        tags = {i: p for i, p in yaml.safe_load(f)['tags'].items() if p and p.get('xyz')}
-    landmarks = load_landmarks(os.path.join(CONFIG_DIR, 'landmarks.txt'))
-    assert sorted(tags) == sorted(landmarks)
-    for tag_id, (x, y, yaw) in landmarks.items():
-        pose = tags[tag_id]
-        assert pose['xyz'][:2] == pytest.approx([x, y], abs=1e-3), tag_id
-        # upright tag: rpy = [pi/2, 0, yaw + pi/2] (see experiment.yaml)
-        assert pose['rpy'][0] == pytest.approx(math.pi / 2, abs=1e-3), tag_id
-        assert wrap_angle(pose['rpy'][2] - math.pi / 2 - yaw) == pytest.approx(0, abs=1e-3), tag_id

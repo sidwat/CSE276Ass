@@ -14,6 +14,7 @@ A run report (written automatically when velocity_control exits) is, in the run 
                 dead reckoning and landmark-only poses
   commands.png  v, w (requested and sent), L/R wheel commands and the correction per tick
   summary.txt   timing, distance, sightings per tag and the estimate at each waypoint
+  final_*.png/svg, poses.html   every estimated pose as an arrow (see pose_plots)
 """
 
 import argparse
@@ -123,9 +124,13 @@ def read_run(run_dir, landmarks):
     if not ticks:
         raise SystemExit(f'no ticks.csv rows in {run_dir}: was velocity_control run with log_dir?')
     # The pose each sighting implies by itself, from the logged (range, bearing, orientation)
-    vision = []
+    vision, latency = [], []
     for r in read_csv(os.path.join(run_dir, 'measurements.csv')):
         tag = int(r['tag'])
+        if r.get('status') == 'out_of_range':
+            continue  # ignored by the EKF (beyond max_tag_range)
+        if not math.isnan(r.get('latency', math.nan)):
+            latency.append(r['latency'])
         if tag in landmarks:
             pose = pose_from_measurement((r['range'], r['bearing'], r['orientation']),
                                          landmarks[tag])
@@ -145,7 +150,7 @@ def read_run(run_dir, landmarks):
             'mode': [r['mode'] for r in ticks],
             'vision': vision,
             'reached': [(int(r['index']), r['t']) for r in reached],
-            'arrivals': reached}
+            'arrivals': reached, 'latency': np.array(latency)}
 
 
 def wrap_array(a):
@@ -379,14 +384,20 @@ def summarize_run(data, waypoints):
              f'Final pose: corrected ({ekf[-1, 0]:.3f}, {ekf[-1, 1]:.3f}, '
              f'{math.degrees(ekf[-1, 2]):.1f} deg), dead reckoning ({data["odom"][-1, 0]:.3f}, '
              f'{data["odom"][-1, 1]:.3f}, {math.degrees(data["odom"][-1, 2]):.1f} deg)']
+    duration = max(t[-1] - t[0], 1e-9)
     tags = sorted({v[1] for v in data['vision']})
     total = len(data['vision'])
     accepted = sum(1 for v in data['vision'] if v[5])
-    lines.append(f'Sightings: {total} ({total / max(t[-1] - t[0], 1e-9):.1f}/s), '
-                 f'{accepted} accepted, {total - accepted} rejected')
+    lines.append(f'Rates: prediction (control tick) {len(t) / duration:.1f} Hz, '
+                 f'EKF corrections {accepted / duration:.2f} Hz, '
+                 f'landmark-only poses {total / duration:.2f} Hz')
+    if len(data['latency']):
+        lines.append(f'Camera-to-EKF latency: mean {np.mean(data["latency"]) * 1000:.0f} ms, '
+                     f'max {np.max(data["latency"]) * 1000:.0f} ms')
+    lines.append(f'Sightings: {total}, {accepted} accepted, {total - accepted} rejected')
     for tag in tags:
         mine = [v for v in data['vision'] if v[1] == tag]
-        lines.append(f'  tag {tag}: {len(mine)} sightings, '
+        lines.append(f'  tag {tag}: {len(mine)} sightings ({len(mine) / duration:.2f}/s), '
                      f'{sum(1 for v in mine if v[5])} accepted')
     lines.append('Waypoints (estimate at arrival; measure the true pose at the floor marks):')
     for r in data['arrivals']:
@@ -417,6 +428,8 @@ def report(run_dir, unit=1.0, waypoints_path=None, landmarks_path=None):
     with open(os.path.join(run_dir, 'summary.txt'), 'w') as f:
         f.write(summary + '\n')
     print(summary)
+    from robot_control.pose_plots import make_pose_plots
+    make_pose_plots(run_dir)
     print(f'Report written to {run_dir}')
 
 
