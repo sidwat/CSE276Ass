@@ -52,6 +52,7 @@ class VelocityControlNode(Node):
         self.declare_parameter('speed_per_unit', 1.0)  # m/s of wheel speed per 1.0 of command
         self.declare_parameter('wheel_base', 0.2)      # m, effective track width
         self.declare_parameter('max_wheel_cmd', 0.5)   # motor_control clips to +/-0.5 anyway
+        self.declare_parameter('min_wheel_cmd', 0.0)   # motor dead-band: weaker commands scaled up
         self.declare_parameter('wheel_trim', 0.0)      # >0 if it veers right going straight
         self.declare_parameter('control_rate', 20.0)   # Hz, must beat the 0.15s motor watchdog
         self.declare_parameter('start_delay', 2.0)     # s, wait for motor_control to come up
@@ -75,6 +76,10 @@ class VelocityControlNode(Node):
         self.declare_parameter('publish_markers', True)  # /slam/* topics for foxglove
         self.declare_parameter('map_frame', 'slam_map')
         self.declare_parameter('path_name', '')         # recorded in run_info.json
+        self.declare_parameter('run_name', '')          # run folder name (hw3_launch.py sets it)
+        self.declare_parameter('start_pose', '')        # 'x,y,theta' world start, for start_pose
+        self.declare_parameter('post_run_eval', False)  # run evaluate_slam when the run ends
+        self.declare_parameter('gt_file', '')           # ground truth for that evaluation
         defaults = Gains()
         for name, value in vars(defaults).items():
             self.declare_parameter(name, value)
@@ -95,6 +100,15 @@ class VelocityControlNode(Node):
         self.speed_per_unit = float(self.get_parameter('speed_per_unit').value)
         self.wheel_base = float(self.get_parameter('wheel_base').value)
         self.max_wheel_cmd = float(self.get_parameter('max_wheel_cmd').value)
+        self.min_wheel_cmd = float(self.get_parameter('min_wheel_cmd').value)
+        max_drive = float(self.get_parameter('max_v').value) / self.speed_per_unit
+        self.get_logger().info(
+            f'Driving wheel command {max_drive:.3f} at max_v; min_wheel_cmd '
+            f'{self.min_wheel_cmd:.3f} (weaker non-zero commands are scaled up to it)')
+        if max_drive < 0.15 and self.min_wheel_cmd < 0.15:
+            self.get_logger().warn(
+                f'max_v gives a wheel command of only {max_drive:.3f}: below ~0.15 the motors may '
+                f'not move at all. Raise max_v or set min_wheel_cmd to the measured dead-band.')
         self.wheel_trim = float(self.get_parameter('wheel_trim').value)
         self.pause_at_waypoint = float(self.get_parameter('pause_at_waypoint').value)
         self.use_imu = bool(self.get_parameter('use_imu').value)
@@ -189,7 +203,7 @@ class VelocityControlNode(Node):
     def setup_slam_logs(self, log_dir, gains, noise_defaults):
         names = (['speed_per_unit', 'wheel_base', 'wheel_trim', 'camera_x', 'camera_y',
                   'camera_yaw', 'camera_upside_down', 'max_tag_range', 'use_imu', 'control_rate',
-                  'start_delay', 'search_inflate', 'pause_at_waypoint']
+                  'start_delay', 'search_inflate', 'pause_at_waypoint', 'min_wheel_cmd']
                  + list(vars(noise_defaults)) + list(vars(self.ekf.params)))
         info = {
             'simulated': False,
@@ -197,7 +211,18 @@ class VelocityControlNode(Node):
             'waypoints_per_lap': self.waypoints_per_lap,
             'params': {**{n: self.get_parameter(n).value for n in names}, **vars(gains)},
         }
-        self.slam_log = SLAMRunLogger(log_dir, info, self.waypoints_file)
+        start = None
+        start_text = str(self.get_parameter('start_pose').value).strip()
+        if start_text:
+            try:
+                start = tuple(float(v) for v in start_text.replace(',', ' ').split())
+                if len(start) != 3:
+                    raise ValueError
+            except ValueError:
+                self.get_logger().warn(f'start_pose {start_text!r} is not "x,y,theta"; ignored')
+                start = None
+        self.slam_log = SLAMRunLogger(log_dir, info, self.waypoints_file, start_pose=start,
+                                      run_name=self.get_parameter('run_name').value or None)
         self.log_period = float(self.get_parameter('log_period').value)
         self.log_start = self.slam_log.t0
         self.last_log = -math.inf
@@ -499,6 +524,13 @@ class VelocityControlNode(Node):
     def send(self, v, w):
         left, right = body_to_wheel_cmds(
             v, w, self.speed_per_unit, self.wheel_base, self.max_wheel_cmd)
+        # Motor dead-band: a command below min_wheel_cmd does not move the robot at all, while
+        # the filter would still predict motion from it. Scale weak commands up (keeping the
+        # L/R ratio, i.e. the turning radius) so the robot does what is dead-reckoned.
+        largest = max(abs(left), abs(right))
+        if 1e-6 < largest < self.min_wheel_cmd:
+            left *= self.min_wheel_cmd / largest
+            right *= self.min_wheel_cmd / largest
         # Dead-reckon from what was actually sent, after saturation
         self.v, self.w = wheel_cmds_to_body(left, right, self.speed_per_unit, self.wheel_base)
         # The trim compensates for mismatched motors so the robot actually does what was
@@ -523,8 +555,27 @@ class VelocityControlNode(Node):
             self.get_logger().info(
                 f'SLAM run saved to {self.slam_log.run_dir}: {self.ekf.n_landmarks} landmarks '
                 f'{sorted(self.ekf.index)}, sightings {self.ekf.counts}')
+            if bool(self.get_parameter('post_run_eval').value):
+                self.start_post_run_eval(self.slam_log.run_dir)
             self.slam_log = None
         super().destroy_node()
+
+    def start_post_run_eval(self, run_dir):
+        """Post-run hook: evaluate the run in a detached process (survives launch shutdown)."""
+        import subprocess
+        import sys
+        cmd = [sys.executable, '-m', 'robot_control.hw3_tool', 'eval', run_dir, '--quiet']
+        gt = self.get_parameter('gt_file').value
+        if gt:
+            cmd += ['--gt', gt]
+        try:
+            with open(os.path.join(run_dir, 'eval.log'), 'w') as log:
+                subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+            print(f'[post-run hook] evaluating {run_dir} in the background '
+                  f'(log: {run_dir}/eval.log, results: {run_dir}/eval/)', flush=True)
+        except OSError as e:
+            print(f'[post-run hook] could not start the evaluation: {e}', flush=True)
 
 
 def main(args=None):

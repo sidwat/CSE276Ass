@@ -1,7 +1,7 @@
 """
 Evaluate HW3 EKF-SLAM runs (log_dir/run_*/ from velocity_control or simulate_slam) for the report.
 
-  ros2 run robot_control evaluate_slam ~/hw3_logs/run_20261112_150000 --gt landmarks_hw3_gt.txt
+  ros2 run robot_control evaluate_slam square_3dof_2026-11-12_15-00-00 --gt landmarks_hw3_gt.txt
   ros2 run robot_control evaluate_slam RUN [RUN ...] --gt GT --start 0.914 0.914 0 --out cmp/
   ros2 run robot_control evaluate_slam RUN --sensor-noise      # robot standing still: fit R
 
@@ -15,7 +15,6 @@ With several runs, also a comparison table (--out, default: next to the first ru
 
 import argparse
 import csv
-import glob
 import json
 import math
 import os
@@ -156,8 +155,19 @@ def map_errors(slam_map, gt, start=None, align=False):
             p, psi_w, cov_w = np.array([x, y]), psi, cov
         est.append((p, psi_w, cov_w, var_psi, n))
     transform = None
+    inliers = set(common)
     if align and len(common) >= 2:
-        theta, t, _ = best_fit([e[0] for e in est], [gt[k][:2] for k in common])
+        src, dst = [e[0] for e in est], [np.array(gt[k][:2]) for k in common]
+        theta, t, _ = best_fit(src, dst)
+        if len(common) >= 4:
+            # Robust: refit without gross outliers (e.g. a landmark initialised from a bad pose),
+            # so one wrong tag does not rotate the whole map; outliers are still reported.
+            res = [np.linalg.norm(rot(theta) @ p + t - q) for p, q in zip(src, dst)]
+            cut = max(2.5 * float(np.median(res)), 0.15)
+            keep = [i for i, r in enumerate(res) if r <= cut]
+            if 3 <= len(keep) < len(common):
+                theta, t, _ = best_fit([src[i] for i in keep], [dst[i] for i in keep])
+                inliers = {common[i] for i in keep}
         transform = (theta, t)
         R = rot(theta)
         est = [(R @ p + t, wrap_angle(psi + theta) if math.isfinite(psi) else psi,
@@ -172,6 +182,7 @@ def map_errors(slam_map, gt, start=None, align=False):
             'err_psi_deg': math.degrees(wrap_angle(psi - gyaw)) if math.isfinite(psi) else None,
             'std_x': math.sqrt(cov[0, 0]), 'std_y': math.sqrt(cov[1, 1]),
             'area95': ellipse_area(cov), 'cov': cov, 'sightings': n,
+            'fit_inlier': tag in inliers,
             # Mahalanobis distance of the true position under the filter's covariance
             'nees': float(np.array([p[0] - gx, p[1] - gy])
                           @ np.linalg.solve(cov + 1e-12 * np.eye(2),
@@ -346,6 +357,93 @@ def plot_maps(run, gt, out, arena, raw_rows, aligned_rows, transform_aligned):
                    f'mean landmark error {100 * s["mean"]:.1f} cm (RMSE {100 * s["rmse"]:.1f})')
         written.append(save(fig, out, 'map_aligned.png'))
     return written
+
+
+def _overlay_panel(ax, plt, run, gt, rows, transform, arena, title):
+    """Ground-truth arena and tags with the SLAM map and trajectory drawn on top of it."""
+    if arena:
+        ax.add_patch(plt.Rectangle((0, 0), arena, arena, fill=True, facecolor='0.96',
+                                   edgecolor='0.35', linewidth=2, label=f'arena {arena:g} m'))
+    traj = run.trajectory
+    if traj:
+        pts = np.array([transform(p['x'], p['y']) for p in traj])
+        ax.plot(pts[:, 0], pts[:, 1], color='tab:blue', linewidth=1.0, alpha=0.6,
+                label='SLAM trajectory')
+    s = transform(0.0, 0.0)
+    ax.plot(*s, marker='*', markersize=16, color='gold', markeredgecolor='black',
+            linestyle='none', label='start', zorder=10)
+    by_tag = {r['tag']: r for r in rows}
+    first_gt = first_est = True
+    for tag, (gx, gy, gyaw) in sorted(gt.items()):
+        half = 0.0865
+        ax.plot([gx - half * math.sin(gyaw), gx + half * math.sin(gyaw)],
+                [gy + half * math.cos(gyaw), gy - half * math.cos(gyaw)], color='black',
+                linewidth=5, solid_capstyle='butt',
+                label='actual tag (measured)' if first_gt else None)
+        ax.plot(gx, gy, 'o', color='tab:green', markersize=6, markeredgecolor='black',
+                zorder=5)
+        first_gt = False
+        # labels pushed into the arena, away from the wall
+        ix, iy = math.cos(gyaw), math.sin(gyaw)
+        r = by_tag.get(tag)
+        text = f'tag {tag}\nactual ({gx:.2f}, {gy:.2f})'
+        if r is not None:
+            text += f"\nSLAM ({r['x']:.2f}, {r['y']:.2f})\nerror {100 * r['err']:.1f} cm"
+        ax.annotate(text, (gx, gy), xytext=(gx + 0.55 * ix - 0.25 * abs(iy),
+                                            gy + 0.55 * iy - 0.12 * abs(ix)),
+                    fontsize=6.5, color='black', va='center',
+                    bbox={'boxstyle': 'round,pad=0.2', 'fc': 'white', 'ec': '0.7',
+                          'alpha': 0.85})
+        if r is None:
+            continue
+        draw_ellipse(ax, (r['x'], r['y']), r['cov'], facecolor='tab:red', alpha=0.25,
+                     edgecolor='tab:red', label=ellipse_label() if first_est else None)
+        ax.plot(r['x'], r['y'], 'x', color='tab:red', markersize=9, markeredgewidth=2,
+                label='SLAM estimate' if first_est else None, zorder=6)
+        ax.plot([r['x'], gx], [r['y'], gy], color='tab:red', linestyle='--', linewidth=1,
+                label='estimate -> actual' if first_est else None)
+        first_est = False
+    errs = [r['err'] for r in rows]
+    ax.set_title(f'{title}\nmean landmark error {100 * np.mean(errs):.1f} cm over {len(errs)} tags'
+                 if errs else title, fontsize=10)
+    ax.set_xlabel('x [m] (east)')
+    ax.set_ylabel('y [m] (north)')
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    if arena:
+        ax.set_xlim(-0.6, arena + 0.6)
+        ax.set_ylim(-0.6, arena + 0.6)
+
+
+def plot_overlay(run, gt, out, arena, raw_rows, aligned_rows, transform_aligned):
+    """map_overlay.png: actual (measured) map with the SLAM map overlaid, two alignments."""
+    if not gt or not (raw_rows or aligned_rows):
+        return None
+    plt = plt_module()
+    panels = []
+    if raw_rows and run.start is not None:
+        panels.append((raw_rows, lambda x, y: tuple(to_world(run.start, x, y)[0]),
+                       'SLAM map placed with the measured start pose ({:.2f}, {:.2f}, {:.0f} deg)'
+                       .format(run.start[0], run.start[1], math.degrees(run.start[2]))))
+    if aligned_rows and transform_aligned is not None:
+        theta, t = transform_aligned
+        R = rot(theta)
+        base = run.start if run.start is not None else (0.0, 0.0, 0.0)
+        out_tags = [r['tag'] for r in aligned_rows if not r.get('fit_inlier', True)]
+        panels.append((aligned_rows, lambda x, y: tuple(R @ to_world(base, x, y)[0] + t),
+                       f'after best-fit rigid alignment (shape error; '
+                       f'{math.degrees(theta):+.1f} deg'
+                       + (f', fit ignores outlier tag {out_tags}' if out_tags else '') + ')'))
+    fig, axes = plt.subplots(1, len(panels), figsize=(8 * len(panels), 8.5), squeeze=False)
+    for ax, (rows, tf, title) in zip(axes[0], panels):
+        _overlay_panel(ax, plt, run, gt, rows, tf, arena, title)
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncol=min(len(labels), 7), fontsize=8,
+               frameon=False)
+    fig.suptitle(f'{run.name}: actual map (black / green) with the SLAM map overlaid (red)',
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.97))
+    return save(fig, out, 'map_overlay.png')
 
 
 def save(fig, out, name):
@@ -554,6 +652,18 @@ def write_report(run, gt, out, raw_rows, aligned_rows, transform, lap_table, fig
                   f'{cm(np.max(errs))} cm; dead reckoning mean {cm(np.mean(odom_errs))} cm, '
                   f'max {cm(np.max(odom_errs))} cm', '']
 
+    if raw_rows:
+        lines += ['## Actual vs estimated landmark positions (world frame, measured start pose)',
+                  '', '| tag | actual x [m] | actual y [m] | actual yaw [deg] | SLAM x [m] | '
+                  'SLAM y [m] | SLAM yaw [deg] | dx [cm] | dy [cm] | error [cm] |',
+                  '|---|---|---|---|---|---|---|---|---|---|']
+        for r in raw_rows:
+            yaw = f'{math.degrees(r["psi"]):.1f}' if math.isfinite(r['psi']) else 'n/a'
+            lines.append(f'| {r["tag"]} | {r["gt_x"]:.3f} | {r["gt_y"]:.3f} | '
+                         f'{math.degrees(r["gt_yaw"]):.1f} | {r["x"]:.3f} | {r["y"]:.3f} | '
+                         f'{yaw} | '
+                         f'{100 * r["err_x"]:+.1f} | {100 * r["err_y"]:+.1f} | {cm(r["err"])} |')
+        lines.append('')
     for title, rows in (('measured start pose', raw_rows), ('best-fit rigid alignment',
                                                             aligned_rows)):
         if not rows:
@@ -577,6 +687,14 @@ def write_report(run, gt, out, raw_rows, aligned_rows, transform, lap_table, fig
                   f'{math.degrees(transform[0]):+.2f} deg, translation '
                   f'({cm(transform[1][0])}, {cm(transform[1][1])}) cm. A large value means the '
                   f'start pose measurement (not the map shape) dominates the raw error.', '']
+        outliers = [r['tag'] for r in aligned_rows if not r.get('fit_inlier', True)]
+        if outliers:
+            inl = [r for r in aligned_rows if r.get('fit_inlier', True)]
+            raw_in = [r for r in raw_rows if r['tag'] not in outliers]
+            lines += [f'Tags ignored by the alignment fit as outliers: {outliers}. Without them: '
+                      f'mean error {cm(stats(raw_in)["mean"]) if raw_in else "-"} cm via the '
+                      f'start pose, {cm(stats(inl)["mean"])} cm after alignment (map shape) over '
+                      f'{len(inl)} tags.', '']
     if gt and len(set(run.final_map) & set(gt)) >= 2:
         common = sorted(set(run.final_map) & set(gt))
         base = run.start or (0.0, 0.0, 0.0)
@@ -663,6 +781,7 @@ def evaluate(run, gt, out, arena):
                                if gt else ([], None))
     lap_table = lap_table_for(run, gt)
     figures = plot_maps(run, gt, out, arena, raw_rows, aligned_rows, transform)
+    figures.append(plot_overlay(run, gt, out, arena, raw_rows, aligned_rows, transform))
     if run.trajectory:
         figures.append(plot_timeline(run, out))
     figures.append(plot_laps(lap_table, out, run.name))
@@ -720,11 +839,12 @@ def write_comparison(summaries, out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('runs', nargs='*', help='run folders (default: newest in ~/hw3_logs)')
+    parser.add_argument('runs', nargs='*',
+                        help='run folders or names in <workspace>/hw3_logs (default: newest)')
     parser.add_argument('--gt', help='ground-truth landmarks file (world frame)')
     parser.add_argument('--start', type=float, nargs=3, metavar=('X0', 'Y0', 'THETA0'),
                         help='world start pose (overrides RUN/start_pose.txt; one run only)')
-    parser.add_argument('--arena', type=float, default=3.048, help='arena side [m], 0 to hide')
+    parser.add_argument('--arena', type=float, default=3.0, help='arena side [m], 0 to hide')
     parser.add_argument('--out', help='output folder (one run: RUN/eval; several: comparison)')
     parser.add_argument('--ellipse-scale', type=float, default=1.0,
                         help='magnify the drawn 95%% ellipses (e.g. 5 when they are tiny)')
@@ -734,7 +854,8 @@ def main():
     global ELLIPSE_SCALE
     ELLIPSE_SCALE = args.ellipse_scale
 
-    runs = args.runs or [max(glob.glob(os.path.expanduser('~/hw3_logs/run_*')))]
+    from robot_control import hw3_paths
+    runs = [hw3_paths.resolve_run(r) for r in (args.runs or ['latest'])]
     gt = load_landmarks(args.gt) if args.gt else {}
     summaries = []
     for run_dir in runs:

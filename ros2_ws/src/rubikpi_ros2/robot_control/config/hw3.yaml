@@ -17,7 +17,7 @@ velocity_control_node:
     max_tag_range: 2.5      # m, a 17.3 cm tag is ~30 px at 2.5 m; farther ranges are unreliable
     use_imu: false          # true: predict heading from the IMU yaw (recommended if it is good)
     imu_yaw_sign: 1.0
-    log_dir: ~/hw3_logs
+    log_dir: ~/CSE276Ass/ros2_ws/hw3_logs   # hw3_launch.py overrides it with <workspace>/hw3_logs
     log_period: 0.5         # s between trajectory.csv rows
 
     pause_at_waypoint: 0.5  # s, after settle_time
@@ -25,6 +25,7 @@ velocity_control_node:
                             # pose is still exactly known, so they get the smallest covariance
     control_rate: 20.0      # Hz
     max_wheel_cmd: 0.5
+    min_wheel_cmd: 0.15     # motor dead-band (calibrate_motion): weaker commands are scaled up to it
 
     # --- Controller (as HW2, slower for less motion blur and latency error) ---
     pos_tolerance: 0.03
@@ -37,8 +38,8 @@ velocity_control_node:
     search_inflate: 0.3     # rad of heading std added when a SEARCH starts (HW2 used 1.0)
     k_v: 1.26
     k_w: 1.26
-    max_v: 0.15             # m/s
-    min_v: 0.05
+    max_v: 0.25             # m/s -> wheel 0.20 (HW2 value; 0.15 -> 0.12 stalled the motors)
+    min_v: 0.19             # m/s -> wheel 0.15, at the dead-band
     max_w: 1.6
     min_w: 1.1
     realign_angle: 0.5

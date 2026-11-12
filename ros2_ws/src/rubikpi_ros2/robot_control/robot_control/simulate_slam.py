@@ -3,8 +3,8 @@ Simulate an HW3 SLAM run offline (no ROS): same controller, filter and log files
 
 Use it to rehearse the whole pipeline before the real runs, e.g.
 
-  ros2 run robot_control simulate_slam --path square --log-dir ~/hw3_sim
-  ros2 run robot_control evaluate_slam ~/hw3_sim/run_*  --gt <share>/config/landmarks_hw3_gt.txt
+  ros2 run robot_control simulate_slam --path square      # -> <workspace>/hw3_logs/sim_square_...
+  ros2 run robot_control hw3 eval latest-sim       # or in one go: hw3 sim square
 
 The simulated robot is miscalibrated (drives 5% too far, turns 7% too little, veers) and the
 camera is noisy with occasional outliers, so the plots look like a real run's.
@@ -14,7 +14,9 @@ import argparse
 import math
 import os
 import random
+import shutil
 
+from robot_control import hw3_paths
 from robot_control.localization import load_landmarks, NoiseParams
 from robot_control.slam import EKFSLAM, SLAMParams
 from robot_control.slam_logger import SLAMRunLogger
@@ -22,13 +24,13 @@ from robot_control.waypoint_controller import (
     body_to_wheel_cmds, Gains, load_waypoints, WaypointController, wheel_cmds_to_body,
     wrap_angle)
 
-CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config')
+CONFIG_DIR = hw3_paths.config_dir()
 
 # Start pose of each path in the world frame of landmarks_hw3_gt.txt (see the plan, section 3):
 # the square's south-west corner and the octagon's south-side left end, both facing east.
 PATHS = {
-    'square': ('waypoints_hw3_square.txt', 4, (0.9144, 0.9144, 0.0)),
-    'octagon': ('waypoints_hw3_octagon.txt', 8, (1.2192, 0.7881, 0.0)),
+    'square': ('waypoints_hw3_square.txt', 4, hw3_paths.NOMINAL_START['square']),
+    'octagon': ('waypoints_hw3_octagon.txt', 8, hw3_paths.NOMINAL_START['octagon']),
 }
 
 
@@ -177,7 +179,7 @@ def main():
     parser.add_argument('--params', default=os.path.join(CONFIG_DIR, 'hw3.yaml'))
     parser.add_argument('--landmark-dof', type=int, choices=(2, 3))
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--log-dir', default='~/hw3_sim')
+    parser.add_argument('--log-dir', help='default: <workspace>/hw3_logs')
     args = parser.parse_args()
 
     wp_name, per_lap, start = PATHS[args.path]
@@ -189,10 +191,14 @@ def main():
         params['landmark_dof'] = args.landmark_dof
     noise, slam_params, gains = (pick(NoiseParams, params), pick(SLAMParams, params),
                                  pick(Gains, params))
-    info = {'simulated': True, 'path': args.path, 'waypoints_per_lap': per_lap,
+    info = {'simulated': True, 'path': args.path, 'gt_file': os.path.abspath(args.gt),
+            'waypoints_per_lap': per_lap,
             'params': {**vars(noise), **vars(slam_params), **vars(gains)}}
-    logger = SLAMRunLogger(args.log_dir, info, wp_file, start_pose=start,
-                           run_name=f'sim_{args.path}_seed{args.seed}')
+    dof = int(params.get('landmark_dof', 3))
+    logger = SLAMRunLogger(args.log_dir or hw3_paths.logs_dir(), info, wp_file, start_pose=start,
+                           run_name=hw3_paths.sim_run_name(args.path, dof, args.seed))
+    # keep the true map with the run: the shared GT file may be edited later
+    shutil.copy(args.gt, logger.path('landmarks_gt_sim.txt'))
     result = run_simulation(load_waypoints(wp_file), load_landmarks(args.gt), start, noise,
                             slam_params, gains, seed=args.seed, waypoints_per_lap=per_lap,
                             logger=logger,
