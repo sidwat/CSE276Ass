@@ -5,17 +5,23 @@ import re
 import shutil
 import time
 
+from geometry_msgs.msg import Point
+import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
 from robot_control.localization import (
     expected_measurement, load_landmarks, NoiseParams, PoseEKF, tag_measurement)
+from robot_control.slam import (
+    EKFSLAM, is_lap_end, MAP_COLUMNS, map_rows, MEASUREMENT_COLUMNS, measurement_row,
+    SLAMParams, SNAPSHOT_COLUMNS)
 from robot_control.waypoint_controller import (
     body_to_wheel_cmds, Gains, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray
 from tf2_msgs.msg import TFMessage
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 def parse_tag_id(frame):
@@ -36,6 +42,10 @@ class VelocityControlNode(Node):
     corrected by AprilTag sightings (camera_frame -> tag_N transforms on /tf from apriltag_node)
     of the landmarks listed in landmarks_file. With use_imu too, the prediction turns by the IMU
     yaw change instead of the commanded turn rate, so a turn that stalls is not taken as done.
+
+    With use_slam:=true too (HW3), no landmarks_file is used: EKF-SLAM (robot_control/slam.py)
+    estimates the landmarks along with the pose, adding each tag id the first time it is seen.
+    The map is logged at the end of every lap (map_snapshots.csv) and at the end (map.csv).
     """
 
     def __init__(self):
@@ -62,11 +72,18 @@ class VelocityControlNode(Node):
         self.declare_parameter('relocalize_after', 15)  # rejections in a row before forcing one
         self.declare_parameter('log_dir', '')          # write trajectory/waypoint CSVs under here
         self.declare_parameter('log_period', 0.5)      # s between trajectory samples
+        self.declare_parameter('use_slam', False)      # HW3: map the tags instead of loading them
+        self.declare_parameter('waypoints_per_lap', 0)  # 0: a lap ends at each return to (0, 0)
+        self.declare_parameter('publish_map', True)    # MarkerArray on slam_map, for foxglove
+        self.declare_parameter('map_frame', 'slam_map')
         defaults = Gains()
         for name, value in vars(defaults).items():
             self.declare_parameter(name, value)
         noise_defaults = NoiseParams()
         for name, value in vars(noise_defaults).items():
+            self.declare_parameter(name, value)
+        slam_defaults = SLAMParams()
+        for name, value in vars(slam_defaults).items():
             self.declare_parameter(name, value)
 
         path = self.get_parameter('waypoints_file').value
@@ -84,6 +101,8 @@ class VelocityControlNode(Node):
         self.use_imu = bool(self.get_parameter('use_imu').value)
         self.imu_yaw_sign = float(self.get_parameter('imu_yaw_sign').value)
         self.use_vision = bool(self.get_parameter('use_vision').value)
+        self.use_slam = self.use_vision and bool(self.get_parameter('use_slam').value)
+        self.waypoints_per_lap = int(self.get_parameter('waypoints_per_lap').value)
 
         # Pose estimate in the start frame, and the body velocity actually being commanded
         self.x = 0.0
@@ -103,12 +122,18 @@ class VelocityControlNode(Node):
             self.create_subscription(Imu, 'imu_data', self.imu_callback, 10)
 
         self.ekf = None
+        self.slam = None
+        self.lap = 0
+        self.landmarks_file = None
+        self.map_publisher = None
+        self.path = []
+        self.last_map_publish = -math.inf
         self.tags_seen = 0
         self.last_fix = -math.inf  # monotonic time of the last accepted tag sighting
         self.last_phase = None
         self.rejected_in_row = 0
         if self.use_vision:
-            self.setup_vision(noise_defaults)
+            self.setup_vision(noise_defaults, slam_defaults)
 
         self.publisher = self.create_publisher(Float32MultiArray, 'motor_commands', 10)
 
@@ -124,19 +149,31 @@ class VelocityControlNode(Node):
             self.get_logger().info(f'  [{i}] x={wx:.2f} y={wy:.2f} theta={wt:.2f}')
 
         self.trajectory_log = self.waypoint_log = self.measurement_log = None
+        self.snapshot_log = None
+        self.run_dir = None
         log_dir = self.get_parameter('log_dir').value
         if log_dir:
             self.setup_logs(os.path.expanduser(log_dir))
 
-    def setup_vision(self, noise_defaults):
-        path = self.get_parameter('landmarks_file').value
-        if not path:
-            raise RuntimeError('landmarks_file parameter is required with use_vision')
-        self.landmarks = load_landmarks(path)
-        self.landmarks_file = path
+    def setup_vision(self, noise_defaults, slam_defaults):
         noise = NoiseParams(
             **{name: float(self.get_parameter(name).value) for name in vars(noise_defaults)})
-        self.ekf = PoseEKF(noise=noise)
+        if self.use_slam:
+            # The filter is given neither the number of landmarks nor where they are
+            params = SLAMParams(**{name: type(value)(self.get_parameter(name).value)
+                                   for name, value in vars(slam_defaults).items()})
+            self.slam = self.ekf = EKFSLAM(noise, params)
+            self.landmarks = {}
+            if bool(self.get_parameter('publish_map').value):
+                self.map_frame = self.get_parameter('map_frame').value
+                self.map_publisher = self.create_publisher(MarkerArray, 'slam_map', 1)
+        else:
+            path = self.get_parameter('landmarks_file').value
+            if not path:
+                raise RuntimeError('landmarks_file parameter is required with use_vision')
+            self.landmarks = load_landmarks(path)
+            self.landmarks_file = path
+            self.ekf = PoseEKF(noise=noise)
         self.camera_frame = self.get_parameter('camera_frame').value
         self.camera_pose = tuple(float(self.get_parameter(name).value)
                                  for name in ('camera_x', 'camera_y', 'camera_yaw'))
@@ -144,6 +181,11 @@ class VelocityControlNode(Node):
         self.max_tag_range = float(self.get_parameter('max_tag_range').value)
         self.relocalize_after = int(self.get_parameter('relocalize_after').value)
         self.create_subscription(TFMessage, '/tf', self.tf_callback, 100)
+        if self.use_slam:
+            self.get_logger().info(
+                f'EKF-SLAM: empty map, landmark_dof {self.slam.dof}, a tag is added after '
+                f'{self.slam.params.min_sightings} agreeing sightings')
+            return
         self.get_logger().info(f'Localizing with {len(self.landmarks)} landmarks from {path}')
         for tag_id, (lx, ly, lyaw) in sorted(self.landmarks.items()):
             self.get_logger().info(f'  tag {tag_id}: x={lx:.2f} y={ly:.2f} yaw={lyaw:.2f}')
@@ -151,16 +193,25 @@ class VelocityControlNode(Node):
     def setup_logs(self, log_dir):
         run_dir = os.path.join(log_dir, time.strftime('run_%Y%m%d_%H%M%S'))
         os.makedirs(run_dir, exist_ok=True)
+        self.run_dir = run_dir
         self.trajectory_file = open(os.path.join(run_dir, 'trajectory.csv'), 'w', newline='')
         self.trajectory_log = csv.writer(self.trajectory_file)
         self.trajectory_log.writerow(
             ['t', 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta', 'waypoint', 'tags_seen',
-             'odom_x', 'odom_y', 'odom_theta', 'pred_x', 'pred_y', 'pred_theta'])
+             'odom_x', 'odom_y', 'odom_theta', 'pred_x', 'pred_y', 'pred_theta', 'n_landmarks'])
         self.waypoint_file = open(os.path.join(run_dir, 'waypoints.csv'), 'w', newline='')
         self.waypoint_log = csv.writer(self.waypoint_file)
         self.waypoint_log.writerow(
             ['index', 't', 'goal_x', 'goal_y', 'goal_theta', 'x', 'y', 'theta'])
-        if self.ekf is not None:
+        if self.slam is not None:
+            self.measurement_file = open(
+                os.path.join(run_dir, 'measurements.csv'), 'w', newline='')
+            self.measurement_log = csv.writer(self.measurement_file)
+            self.measurement_log.writerow(MEASUREMENT_COLUMNS)
+            self.snapshot_file = open(os.path.join(run_dir, 'map_snapshots.csv'), 'w', newline='')
+            self.snapshot_log = csv.writer(self.snapshot_file)
+            self.snapshot_log.writerow(SNAPSHOT_COLUMNS)
+        elif self.ekf is not None:
             shutil.copy(self.landmarks_file, os.path.join(run_dir, 'landmarks.txt'))
             # Every tag sighting next to what the current estimate predicted, for debugging
             self.measurement_file = open(
@@ -186,7 +237,7 @@ class VelocityControlNode(Node):
             if tf.header.frame_id != self.camera_frame:
                 continue
             tag_id = parse_tag_id(tf.child_frame_id)
-            if tag_id not in self.landmarks:
+            if tag_id is None or (not self.use_slam and tag_id not in self.landmarks):
                 continue
             t, q = tf.transform.translation, tf.transform.rotation
             normal = (2.0 * (q.x * q.z + q.w * q.y),
@@ -198,6 +249,9 @@ class VelocityControlNode(Node):
                 continue
 
             stamp = Time.from_msg(tf.header.stamp).nanoseconds * 1e-9
+            if self.use_slam:
+                self.slam_sighting(tag_id, measurement, stamp)
+                continue
             force = self.rejected_in_row >= self.relocalize_after
             if force:
                 self.get_logger().warn(f'{self.rejected_in_row} sightings rejected in a row; '
@@ -222,6 +276,33 @@ class VelocityControlNode(Node):
                     f'Rejected tag {tag_id} sighting (Mahalanobis^2 {distance:.1f})',
                     throttle_duration_sec=1.0)
 
+    def slam_sighting(self, tag_id, measurement, stamp):
+        """
+        Feed one sighting to EKF-SLAM.
+
+        There is no forced re-localization here: with SLAM it would overwrite the map. Only an
+        accepted re-observation of a mapped tag confirms the heading; a freshly added landmark
+        agrees with the current pose by construction, so it confirms nothing.
+        """
+        pose = self.slam.pose_at(stamp)
+        obs = self.slam.observe(tag_id, measurement, stamp, w=self.w)
+        if self.measurement_log:
+            self.measurement_log.writerow(measurement_row(
+                time.monotonic() - self.log_start, tag_id, measurement, obs, pose,
+                self.slam.n_landmarks))
+        if obs.event == 'updated':
+            self.tags_seen += 1
+            self.last_fix = time.monotonic()
+        elif obs.event == 'added':
+            m, _ = self.slam.landmarks()[tag_id]
+            self.get_logger().info(
+                f'New landmark: tag {tag_id} at ({m[0]:.2f}, {m[1]:.2f}); '
+                f'{self.slam.n_landmarks} in the map')
+        elif obs.event == 'rejected':
+            self.get_logger().info(
+                f'Rejected tag {tag_id} sighting (Mahalanobis^2 {obs.d2:.1f})',
+                throttle_duration_sec=1.0)
+
     def control_loop(self):
         now = time.monotonic()
         dt = now - self.last_time
@@ -229,6 +310,7 @@ class VelocityControlNode(Node):
 
         self.integrate_pose(dt)
         self.log_trajectory(now)
+        self.publish_map(now)
 
         if now < self.hold_until or self.finished:
             self.send(0.0, 0.0)
@@ -246,7 +328,8 @@ class VelocityControlNode(Node):
         phase = self.controller.phase
         if phase == WaypointController.SEARCH and self.last_phase != phase:
             self.get_logger().info('No tag confirms the heading; searching for one')
-            self.ekf.inflate((0.0, 0.0, 1.0))  # the heading is unknown: trust the next sighting
+            if not self.use_slam:  # with SLAM this would also loosen every new landmark
+                self.ekf.inflate((0.0, 0.0, 1.0))  # heading unknown: trust the next sighting
         self.last_phase = phase
         if reached is not None:
             wx, wy, wt = self.controller.waypoints[reached]
@@ -258,6 +341,9 @@ class VelocityControlNode(Node):
                     [reached, f'{now - self.log_start:.2f}', wx, wy, wt,
                      f'{self.x:.4f}', f'{self.y:.4f}', f'{self.theta:.4f}'])
                 self.waypoint_file.flush()
+            if self.slam is not None and is_lap_end(reached, (wx, wy, wt), self.waypoints_per_lap):
+                self.lap += 1
+                self.save_map(now, lap=self.lap)
             self.hold_until = now + self.pause_at_waypoint
         if self.controller.done:
             self.get_logger().info('All waypoints reached')
@@ -297,10 +383,77 @@ class VelocityControlNode(Node):
             [f'{now - self.log_start:.2f}', f'{self.x:.4f}', f'{self.y:.4f}', f'{self.theta:.4f}',
              f'{std[0]:.4f}', f'{std[1]:.4f}', f'{std[2]:.4f}',
              self.controller.index, self.tags_seen]
-            + [f'{v:.4f}' for v in (*self.odom, *self.prediction)])
+            + [f'{v:.4f}' for v in (*self.odom, *self.prediction)]
+            + [self.slam.n_landmarks if self.slam is not None else 0])
         self.trajectory_file.flush()
         self.tags_seen = 0
         self.prediction = [self.x, self.y, self.theta]
+
+    def save_map(self, now, lap=None):
+        """Write map.csv (the current map) and, at the end of a lap, a map_snapshots entry."""
+        rows = map_rows(self.slam)
+        self.get_logger().info(
+            (f'Lap {lap} done: ' if lap else 'Final map: ')
+            + f'{len(rows)} landmarks, ids {sorted(self.slam.index)}')
+        if not self.run_dir:
+            return
+        if lap is not None and self.snapshot_log:
+            for row in rows:
+                self.snapshot_log.writerow(
+                    [lap, f'{now - self.log_start:.2f}']
+                    + [f'{v:.4f}' for v in self.slam.pose] + row)
+            self.snapshot_file.flush()
+        with open(os.path.join(self.run_dir, 'map.csv'), 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(MAP_COLUMNS)
+            writer.writerows(rows)
+
+    def publish_map(self, now):
+        """Landmarks with 95% ellipses, the robot and its path as markers, at 2 Hz."""
+        if self.map_publisher is None or now - self.last_map_publish < 0.5:
+            return
+        self.last_map_publish = now
+        self.path.append((self.x, self.y))
+        stamp = self.get_clock().now().to_msg()
+
+        def marker(ns, marker_id, kind, rgba):
+            m = Marker()
+            m.header.frame_id = self.map_frame
+            m.header.stamp = stamp
+            m.ns, m.id, m.type, m.action = ns, marker_id, kind, Marker.ADD
+            m.color.r, m.color.g, m.color.b, m.color.a = rgba
+            m.pose.orientation.w = 1.0
+            return m
+
+        def set_yaw(m, yaw):
+            m.pose.orientation.z, m.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+
+        markers = MarkerArray()
+        for k, (tag_id, (mean, cov)) in enumerate(self.slam.landmarks().items()):
+            evals, evecs = np.linalg.eigh(cov[:2, :2])
+            ellipse = marker('ellipses', k, Marker.CYLINDER, (0.1, 0.4, 1.0, 0.5))
+            ellipse.pose.position.x, ellipse.pose.position.y = float(mean[0]), float(mean[1])
+            set_yaw(ellipse, math.atan2(evecs[1, 1], evecs[0, 1]))
+            # 95% ellipse: semi-axes sqrt(5.991 lambda); at least 2 cm so it stays visible
+            ellipse.scale.x = max(2 * math.sqrt(5.991 * max(evals[1], 0.0)), 0.02)
+            ellipse.scale.y = max(2 * math.sqrt(5.991 * max(evals[0], 0.0)), 0.02)
+            ellipse.scale.z = 0.01
+            label = marker('labels', k, Marker.TEXT_VIEW_FACING, (1.0, 1.0, 1.0, 1.0))
+            label.pose.position.x, label.pose.position.y = float(mean[0]), float(mean[1])
+            label.pose.position.z = 0.1
+            label.scale.z = 0.1
+            label.text = f'tag {tag_id}'
+            markers.markers += [ellipse, label]
+        robot = marker('robot', 0, Marker.ARROW, (1.0, 0.2, 0.2, 1.0))
+        robot.pose.position.x, robot.pose.position.y = self.x, self.y
+        set_yaw(robot, self.theta)
+        robot.scale.x, robot.scale.y, robot.scale.z = 0.2, 0.05, 0.05
+        path = marker('path', 0, Marker.LINE_STRIP, (1.0, 0.5, 0.0, 0.8))
+        path.scale.x = 0.01
+        for px, py in self.path[-2000:]:
+            path.points.append(Point(x=px, y=py, z=0.0))
+        markers.markers += [robot, path]
+        self.map_publisher.publish(markers)
 
     def send(self, v, w):
         left, right = body_to_wheel_cmds(
@@ -323,6 +476,13 @@ class VelocityControlNode(Node):
             self.waypoint_file.close()
         if self.measurement_log:
             self.measurement_file.close()
+        if self.slam is not None:
+            try:
+                self.save_map(time.monotonic())
+            except Exception as e:  # never lose the logs above over this
+                self.get_logger().error(f'Could not write map.csv: {e}')
+            if self.snapshot_log:
+                self.snapshot_file.close()
         super().destroy_node()
 
 

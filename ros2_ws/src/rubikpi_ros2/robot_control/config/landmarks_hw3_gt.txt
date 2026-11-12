@@ -1,0 +1,11 @@
+# HW3 ground-truth map, read ONLY by evaluate_slam (never by the filter).
+# World frame: origin at the arena's south-west corner, x east, y north. Arena nearly 10 ft ~ 3 m,
+
+9, 1.0, 0.0, 1.5708      # S1
+5, 2.0, 0.0, 1.5708      # S2
+0, 3.0, 1.0, 3.14159     # E1
+7, 3.0, 2.0, 3.14159     # E2
+1, 2.0, 3.0, -1.5708     # N1
+3, 1.0, 3.0, -1.5708     # N2
+4, 0.0, 2.0, 0.0         # W1
+8, 0.0, 1.0, 0.0         # W2

@@ -1,0 +1,19 @@
+# HW3 square, n = 4 ft (1.2192 m), three laps, counter-clockwise.
+# x [m], y [m], theta [rad] relative to the start pose. Start at the square's south-west corner
+# facing east (centred in the 10 ft arena that is (0.914, 0.914) from the SW corner). Each
+# waypoint's heading is the direction of the next side, so the robot turns at the corner.
+# lap 1
+1.2192,0,1.5708
+1.2192,1.2192,3.14159
+0,1.2192,-1.5708
+0,0,0
+# lap 2
+1.2192,0,1.5708
+1.2192,1.2192,3.14159
+0,1.2192,-1.5708
+0,0,0
+# lap 3
+1.2192,0,1.5708
+1.2192,1.2192,3.14159
+0,1.2192,-1.5708
+0,0,0

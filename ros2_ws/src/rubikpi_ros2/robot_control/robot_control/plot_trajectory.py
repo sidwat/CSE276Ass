@@ -11,8 +11,14 @@ from robot_control.waypoint_controller import wrap_angle
 
 
 def read_csv(path):
+    """Rows as dicts; numbers become floats, anything else (e.g. SLAM's event) stays a string."""
+    def value(v):
+        try:
+            return float(v)
+        except ValueError:
+            return v
     with open(path) as f:
-        return [{k: float(v) for k, v in row.items()} for row in csv.DictReader(f)]
+        return [{k: value(v) for k, v in row.items()} for row in csv.DictReader(f)]
 
 
 def print_tag_check(measurements):

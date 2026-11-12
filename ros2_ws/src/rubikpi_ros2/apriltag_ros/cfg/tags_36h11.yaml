@@ -17,8 +17,10 @@
 
         pose_estimation_method: "pnp"   # method for estimating the tag pose
 
-        # optional list of tags
+        # optional list of tags. apriltag_node DROPS every id not listed here, so list every id
+        # that is printed (HW3: 0-29). This is detector configuration, not map knowledge: the
+        # SLAM filter is told neither how many of these tags exist nor where they are.
         tag:
-            ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]         # tag ID
-            frames: [tag_0, tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7, tag_8, tag_9]  # optional frame name
-            sizes: [0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173]  # optional tag-specific edge size
+            ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]  # tag ID
+            frames: [tag_0, tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7, tag_8, tag_9, tag_10, tag_11, tag_12, tag_13, tag_14, tag_15, tag_16, tag_17, tag_18, tag_19, tag_20, tag_21, tag_22, tag_23, tag_24, tag_25, tag_26, tag_27, tag_28, tag_29]  # optional frame name
+            sizes: [0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173, 0.173]  # optional tag-specific edge size
