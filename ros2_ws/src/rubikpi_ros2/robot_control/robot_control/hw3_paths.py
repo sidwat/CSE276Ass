@@ -22,7 +22,7 @@ import time
 # start:=x,y,theta on the launch or hw3 eval --start).
 NOMINAL_START = {
     'square': (0.9, 0.9, 0.0),
-    'octagon': (0.9, 0.9, 0.0),
+    'octagon': (1.21, 0.79, 0.0),
 }
 ARENA_SIDE = 3.0  # m, 10 ft arena taken as 3.0 m
 
