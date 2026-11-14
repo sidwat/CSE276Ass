@@ -1,0 +1,16 @@
+# HW3 GROUND TRUTH (measured arena setup, 2026-11-12), used ONLY by evaluate_slam / simulate_slam /
+# hw3 eval. The SLAM filter never reads it.
+#
+# Arena: 10 ft x 10 ft, taken as 3.0 m x 3.0 m, corners (0,0), (3,0), (3,3), (0,3).
+# World frame: origin at the south-west corner (0, 0), x east, y north.
+# Robot start pose for the runs: (0.9 m, 0.9 m, 0 rad), i.e. facing east (+x).
+#   id, x [m], y [m], yaw [rad]   (yaw = direction the printed face points, into the arena)
+# Every id must be listed in apriltag_ros/cfg/tags_36h11.yaml (tag.ids), or the detector drops it.
+0, 3.05, 0.96,  3.1416
+7, 3.01, 2.03,  3.1416
+1, 2.00, 3.04, -1.5708
+3, 0.96, 3.04, -1.5708
+4, -0.04, 2.04,  0.0
+8, 0.04, 0.96,  0.0
+9, 0.97, -0.04,  1.5708
+5, 1.98, -0.04,  1.5708

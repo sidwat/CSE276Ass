@@ -12,3 +12,7 @@ __pycache__/
 *~
 .#*
 .DS_Store
+
+# HW3 run logs: keep the CSVs/plots for the report, not the raw bags (~30 MB each)
+ros2_ws/hw3_logs/*/bag/
+ros2_ws/hw3_logs/*/eval.log

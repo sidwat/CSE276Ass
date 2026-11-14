@@ -34,6 +34,9 @@ setup(
             'velocity_control = robot_control.velocity_control:main',
             'calibrate_motion = robot_control.calibrate_motion:main',
             'plot_trajectory = robot_control.plot_trajectory:main',
+            'simulate_slam = robot_control.simulate_slam:main',
+            'evaluate_slam = robot_control.evaluate_slam:main',
+            'hw3 = robot_control.hw3_tool:main',
         ],
     },
 )
