@@ -1,15 +1,14 @@
 """
 HW3 EKF-SLAM run: camera + apriltag_node + motor_control + velocity_control (use_slam).
 
-  ros2 launch robot_control hw3_launch.py path:=square            # 3 laps of the 4 ft square
+  ros2 launch robot_control hw3_launch.py path:=square
   ros2 launch robot_control hw3_launch.py path:=octagon record_bag:=true
   ros2 launch robot_control hw3_launch.py path:=square landmark_dof:=2 start:=0.92,0.90,0.0
 
-Every run is one folder in <workspace>/hw3_logs (robot_control/hw3_paths.py), named
-<path>_<dof>dof_<date>_<time>, e.g. square_3dof_2026-11-12_15-04-31. It holds the SLAM logs
+Every run is one folder. It holds the SLAM logs
 (robot_control/slam_logger.py), the bag in bag/ with record_bag:=true (record_images adds the
 compressed camera stream: ~1 MB/s), and eval/ with the maps: when the run ends a post-run hook
-runs `hw3 eval` on it against gt_file, using start (default: the path's nominal start pose).
+runs `hw3 eval` on it against gt_file, using start.
 """
 
 import os

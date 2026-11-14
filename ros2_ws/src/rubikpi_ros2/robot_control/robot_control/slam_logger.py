@@ -1,22 +1,3 @@
-"""
-Write everything the HW3 report needs from one SLAM run into log_dir/run_*/ (no ROS dependencies).
-
-Shared by velocity_control (on the robot) and simulate_slam (offline) so both produce the same
-files, which evaluate_slam reads:
-
-  run_info.json        parameters, waypoint file, path type, laps; summary added at the end
-  start_pose.txt       world-frame start pose: FILL IN with the tape-measured value after the run
-  waypoints_input.txt  copy of the waypoint file that was driven
-  trajectory.csv       filter pose + std, N, map uncertainty, dead reckoning, every log_period
-  measurements.csv     every tag sighting: z, what happened to it, innovation size, pose used
-  landmark_events.csv  each landmark the moment it entered the state
-  waypoints.csv        estimate on arrival at each waypoint (with lap number)
-  map_snapshots.csv    the whole map (means + covariances) at every waypoint, lap end and finish
-  map_final.csv        the final map
-  state_<label>.npz    full mu, Sigma and the id -> index map at each lap end and at the finish
-  truth.csv            (simulation only) the true pose, for trajectory error
-"""
-
 import csv
 import json
 import math

@@ -1,18 +1,3 @@
-"""
-EKF-SLAM with AprilTag landmarks whose number and positions are unknown (no ROS dependencies).
-
-State  x = [x_r, y_r, theta, m_1, ..., m_N], with m_j = (x_j, y_j, psi_j) (landmark_dof = 3) or
-(x_j, y_j) (landmark_dof = 2). psi_j is the direction the tag's printed face points.
-Measurement z = (range, bearing, orientation) of one tag in the robot frame (orientation is
-ignored with landmark_dof = 2).
-
-The start pose defines the map frame, so mu_0|0 = 0 and Sigma_0|0 = 0 (a tiny value is used for
-numerical safety) and the map starts empty: N grows each time a new tag id is confirmed. Tag ids
-are unique, so data association is a dictionary lookup.
-
-See the HW3 implementation plan, section 2, for the derivation of F, G, H, J_x, J_z, Q and R.
-"""
-
 from collections import deque
 from dataclasses import dataclass
 import math
@@ -22,7 +7,7 @@ import numpy as np
 from robot_control.localization import NoiseParams
 from robot_control.waypoint_controller import wrap_angle
 
-# 99% chi-square cutoffs by measurement dimension, used when gate_by_dof is set
+# 99% chi-square cutoffs by measurement dimension
 CHI2_99 = {2: 9.21, 3: 11.34}
 
 
@@ -38,11 +23,6 @@ class SLAMParams:
 
 
 def measurement_model(robot, landmark, dof=3):
-    """
-    Return (h, H_r, H_m): expected measurement and its Jacobians w.r.t. robot and landmark.
-
-    robot is (x, y, theta), landmark (x, y[, psi]). h is (range, bearing[, orientation]).
-    """
     x, y, th = robot[0], robot[1], robot[2]
     dx, dy = landmark[0] - x, landmark[1] - y
     q = max(dx * dx + dy * dy, 1e-12)
@@ -60,11 +40,6 @@ def measurement_model(robot, landmark, dof=3):
 
 
 def inverse_model(robot, z, dof=3):
-    """
-    Return (m, J_x, J_z): landmark implied by sighting z from robot, with its Jacobians.
-
-    m = g(x_r, z) = (x + r cos(theta + phi), y + r sin(theta + phi)[, theta + alpha]).
-    """
     x, y, th = robot[0], robot[1], robot[2]
     r, phi = z[0], z[1]
     b = th + phi
@@ -82,14 +57,11 @@ def inverse_model(robot, z, dof=3):
 
 
 def incidence_angle(z):
-    """Angle between the line of sight and the tag's normal (0 = seen head-on)."""
     return wrap_angle(z[1] + math.pi - z[2])
 
 
 @dataclass
 class Observation:
-    """What observe() did with one sighting; every field is logged to measurements.csv."""
-
     kind: str                       # update | rejected | new | candidate | incidence
     mahalanobis2: float = float('nan')
     expected: tuple = (float('nan'),) * 3
@@ -98,12 +70,6 @@ class Observation:
 
 
 class EKFSLAM:
-    """
-    EKF-SLAM over a state that grows as landmarks are discovered.
-
-    Same interface as PoseEKF (pose, std, predict, inflate) so velocity_control can use either,
-    plus observe() (candidate buffer, then add or update) and landmarks().
-    """
 
     def __init__(self, noise=None, params=None):
         self.noise = noise or NoiseParams()
@@ -120,8 +86,6 @@ class EKFSLAM:
         self.w = 0.0             # last turn rate, for the latency term of R
         self.nis = []            # Mahalanobis^2 of every accepted update (consistency check)
         self.counts = {'update': 0, 'rejected': 0, 'new': 0, 'candidate': 0, 'incidence': 0}
-
-    # --- PoseEKF-compatible interface -------------------------------------------------------
 
     @property
     def pose(self):
@@ -148,16 +112,18 @@ class EKFSLAM:
         F_r = np.array([[1.0, 0.0, -dist * s],
                         [0.0, 1.0, dist * c],
                         [0.0, 0.0, 1.0]])
-        # G_r / dt: maps noise on (distance, rotation) into (x, y, theta)
+
         W = np.array([[c, -dist * s / 2.0],
                       [s, dist * c / 2.0],
                       [0.0, 1.0]])
         M = np.diag([n.odom_dist_std ** 2 * abs(dist),
                      n.odom_turn_std ** 2 * abs(turn) + n.odom_drift_std ** 2 * abs(dist)])
+        
         S = self.sigma
         S[:3, :3] = F_r @ S[:3, :3] @ F_r.T + W @ M @ W.T
         S[:3, 3:] = F_r @ S[:3, 3:]
         S[3:, :3] = S[:3, 3:].T
+        
         if stamp is not None:
             self.history.append((stamp, self.mu[:3].copy()))
 
@@ -165,10 +131,8 @@ class EKFSLAM:
         """Add process noise to the robot pose (e.g. when the heading is in doubt)."""
         self.sigma[:3, :3] += np.diag(np.square(std))
 
-    # --- Measurement handling ---------------------------------------------------------------
-
     def measurement_noise(self, z, w=None):
-        """R: range noise grows with range; angles get (w * tau)^2 for latency while turning."""
+        
         n, p = self.noise, self.params
         lag = ((self.w if w is None else w) * p.latency_std) ** 2
         diag = [(n.range_std + n.range_std_per_m * z[0]) ** 2, n.bearing_std ** 2 + lag]
@@ -189,7 +153,6 @@ class EKFSLAM:
         return self.mu[:3]
 
     def observe(self, tag_id, z, stamp=None):
-        """Handle one sighting: update a mapped tag, or buffer/confirm a new one."""
         z = np.asarray(z, dtype=float)[:self.dof]
         incidence = incidence_angle(z) if len(z) == 3 else float('nan')
         pose = tuple(float(v) for v in self._pose_at(stamp))
@@ -225,7 +188,6 @@ class EKFSLAM:
         return True
 
     def update(self, tag_id, z, stamp=None, R=None):
-        """EKF correction with a mapped landmark. Returns (accepted, mahalanobis^2, expected)."""
         j, d = self.index[tag_id], self.dof
         pose = self._pose_at(stamp)
         h, H_r, H_m = measurement_model(pose, self.mu[j:j + d], d)
@@ -253,19 +215,22 @@ class EKFSLAM:
         return True, d2, h
 
     def add_landmark(self, tag_id, z, stamp=None, R=None):
-        """Augment the state with a new landmark via the inverse sensor model."""
+        
         d = self.dof
         z = np.asarray(z, dtype=float)[:d]
-        # Place it from the pose the image was taken at (the camera frame is late); the
-        # Jacobians are applied to the current robot covariance, as in update().
+
         m, J_x, J_z = inverse_model(self._pose_at(stamp), z, d)
         R = self.measurement_noise(z) if R is None else R
+
         S_nx = J_x @ self.sigma[:3, :]
         S_nn = J_x @ self.sigma[:3, :3] @ J_x.T + J_z @ R @ J_z.T
+
         self.index[tag_id] = len(self.mu)
         self.sightings[tag_id] = 0
+
         self.mu = np.concatenate([self.mu, m])
         self.sigma = np.block([[self.sigma, S_nx.T], [S_nx, S_nn]])
+
         self.sigma = (self.sigma + self.sigma.T) / 2.0
 
     def _wrap_angles(self):
@@ -277,7 +242,6 @@ class EKFSLAM:
     # --- Map access -------------------------------------------------------------------------
 
     def landmarks(self):
-        """{tag id: (mean (x, y, psi or nan), 2x2 position covariance, psi variance or nan)}."""
         out = {}
         for tag_id, j in self.index.items():
             mean = list(self.mu[j:j + 2]) + [self.mu[j + 2] if self.dof == 3 else float('nan')]
@@ -287,7 +251,6 @@ class EKFSLAM:
         return out
 
     def map_uncertainty(self):
-        """Mean landmark position std sqrt(trace/2) over the map, or nan with no landmarks."""
         if not self.index:
             return float('nan')
         return float(np.mean([math.sqrt(max(np.trace(c), 0.0) / 2.0)
