@@ -14,7 +14,12 @@ def clamp(value, low, high):
 
 
 def load_waypoints(path):
-    """Read 'x,y,theta' lines (metres, metres, radians), skipping blanks and '#' comments."""
+    """
+    Read 'x,y,theta' lines (metres, metres, radians), skipping blanks and '#' comments.
+
+    theta 'nan' (or '-') marks a pass-through waypoint: the robot drives through it without
+    turning to a heading or settling there (HW4 planned paths).
+    """
     waypoints = []
     with open(path) as f:
         for lineno, line in enumerate(f, 1):
@@ -24,7 +29,7 @@ def load_waypoints(path):
             parts = line.replace(',', ' ').split()
             if len(parts) != 3:
                 raise ValueError(f'{path}:{lineno}: expected "x,y,theta", got {line!r}')
-            waypoints.append(tuple(float(p) for p in parts))
+            waypoints.append(tuple(float('nan') if p == '-' else float(p) for p in parts))
     return waypoints
 
 
@@ -70,6 +75,7 @@ class Gains:
     search_turn_time: float = 0.3    # s of turning per search step (heading not confirmed)
     search_look_time: float = 1.0    # s stopped after each search step, looking for a tag
     search_max_turn: float = 6.3     # rad of commanded search turning before giving up on it
+    pass_radius: float = 0.06        # m, a pass-through waypoint (theta nan) counts inside this
 
 
 class WaypointController:
@@ -78,6 +84,11 @@ class WaypointController:
 
     Call update() with the current pose estimate every control cycle; it returns the body
     velocity command to apply. settle_time needs update()'s dt to count time.
+
+    A waypoint whose theta is nan is pass-through: it counts as soon as the robot is within
+    pass_radius of it (or has driven past it), and the robot carries on to the next one without
+    turning to a heading, settling or searching. The next leg starts with a turn in place only
+    if it bends by more than realign_angle.
 
     With heading_confirmed (e.g. a landmark was seen during the settle), a waypoint counts once
     its heading has held for settle_time. Without it the estimate may only be the motion model's
@@ -105,6 +116,10 @@ class WaypointController:
     def done(self):
         return self.index >= len(self.waypoints)
 
+    def is_pass_through(self, index=None):
+        index = self.index if index is None else index
+        return 0 <= index < len(self.waypoints) and math.isnan(self.waypoints[index][2])
+
     def update(self, x, y, theta, dt=0.0, heading_confirmed=True):
         """
         Return (v, w, reached) for the pose (x, y, theta), dt seconds after the previous call.
@@ -112,11 +127,28 @@ class WaypointController:
         reached is the index of the waypoint that was completed on this call, otherwise None.
         """
         g = self.gains
+        passed = None  # pass-through waypoint completed on this call
         while not self.done:
             goal_x, goal_y, goal_theta = self.waypoints[self.index]
             dx, dy = goal_x - x, goal_y - y
             dist = math.hypot(dx, dy)
             bearing_err = wrap_angle(math.atan2(dy, dx) - theta)
+
+            if self.is_pass_through():
+                ahead = dx * math.cos(theta) + dy * math.sin(theta)
+                radius = self._pass_radius(goal_x, goal_y, theta)
+                close = (dist < min(g.replan_distance, radius * 2.0)
+                         and self.phase == self.ROTATE_TO_TARGET)
+                if (dist < radius or close
+                        or (self.phase == self.DRIVE and dist < g.replan_distance
+                            and ahead < radius)):
+                    passed = self.index
+                    self.index += 1
+                    self.search_turned = 0.0
+                    # keep driving; DRIVE re-turns in place only for a sharp bend
+                    if self.phase not in (self.DRIVE, self.ROTATE_TO_TARGET):
+                        self.phase = self.ROTATE_TO_TARGET
+                    continue
 
             if self.phase == self.ROTATE_TO_TARGET:
                 if dist < g.replan_distance:  # too close to be worth turning to face it
@@ -124,7 +156,7 @@ class WaypointController:
                 elif abs(bearing_err) < g.heading_tolerance:
                     self.phase = self.DRIVE
                 else:
-                    return 0.0, self._turn_rate(bearing_err), None
+                    return 0.0, self._turn_rate(bearing_err), passed
 
             elif self.phase == self.DRIVE:
                 # Close in, a few cm of sideways error swings the bearing wildly, so stop
@@ -136,11 +168,11 @@ class WaypointController:
                 elif not near and abs(bearing_err) > g.realign_angle:
                     self.phase = self.ROTATE_TO_TARGET
                 elif near:
-                    return clamp(g.k_v * ahead, g.min_v, g.max_v), 0.0, None
+                    return clamp(g.k_v * ahead, g.min_v, g.max_v), 0.0, passed
                 else:
                     v = clamp(g.k_v * dist, g.min_v, g.max_v)
                     w = clamp(g.k_w * bearing_err, -g.max_w, g.max_w)
-                    return v, w, None
+                    return v, w, passed
 
             elif self.phase == self.ROTATE_TO_HEADING:
                 if dist > g.replan_distance:
@@ -151,7 +183,7 @@ class WaypointController:
                     self.phase = self.SETTLE
                     self.settle_time = 0.0
                     continue
-                return 0.0, self._turn_rate(heading_err), None
+                return 0.0, self._turn_rate(heading_err), passed
 
             elif self.phase == self.SETTLE:  # stopped, waiting for the camera to confirm
                 if dist > g.replan_distance:
@@ -162,7 +194,7 @@ class WaypointController:
                     continue
                 self.settle_time += dt
                 if self.settle_time < g.settle_time:
-                    return 0.0, 0.0, None
+                    return 0.0, 0.0, passed
                 if not heading_confirmed and self.search_turned < g.search_max_turn:
                     self.phase = self.SEARCH
                     self.search_time = 0.0
@@ -185,10 +217,26 @@ class WaypointController:
                 step = self.search_time % (g.search_turn_time + g.search_look_time)
                 if step < g.search_turn_time:
                     self.search_turned += g.min_w * dt
-                    return 0.0, self.last_turn_sign * g.min_w, None
-                return 0.0, 0.0, None
+                    return 0.0, self.last_turn_sign * g.min_w, passed
+                return 0.0, 0.0, passed
 
-        return 0.0, 0.0, None
+        return 0.0, 0.0, passed
+
+    def _pass_radius(self, goal_x, goal_y, theta):
+        """
+        Return the radius inside which the current pass-through waypoint counts.
+
+        If the next leg bends by more than realign_angle the robot stops and turns in place
+        there anyway; turning early, pass_radius short of the vertex, would cut the corner
+        (towards the obstacle the vertex was placed around), so it must get within
+        pos_tolerance like any other waypoint. Gentle bends use pass_radius.
+        """
+        g = self.gains
+        if self.index + 1 >= len(self.waypoints):
+            return g.pass_radius
+        nx, ny = self.waypoints[self.index + 1][:2]
+        bend = abs(wrap_angle(math.atan2(ny - goal_y, nx - goal_x) - theta))
+        return g.pos_tolerance if bend > g.realign_angle else g.pass_radius
 
     def _turn_rate(self, err):
         g = self.gains

@@ -68,6 +68,17 @@ Drives the physical robot through a separate, non-ROS motor-controller board ove
   The turn-drive-turn control logic lives in the ROS-free `waypoint_controller.py` so it can be unit
   tested in simulation. `launch/waypoint_launch.py` starts it together with `motor_control`.
 - `config/waypoints.txt` is a symlink to the repo-root `waypoints.txt`.
+- **HW4 path planning** (ROS-free modules, unit-tested in `test/test_hw4_planning.py`):
+  `config/hw4_world.yaml` is the single source of measured inputs (arena, obstacle boxes, robot
+  radius, start/goal, landmark poses, planner settings) in the HW3 world frame (SW corner origin,
+  x east, y north). `world_model.py` (clearance, C-obstacles) → `visibility_planner.py` (fast:
+  visibility graph + time-cost A* + corner merge) / `gvd_planner.py` (safe: brushfire clearance
+  grid + Voronoi + Dijkstra + RDP; also a clearance-weighted comparison planner) →
+  `path_tools.py` (waypoints, metrics, time model). Waypoints with theta `nan` are pass-through
+  (`WaypointController`, `pass_radius`). `velocity_control` takes `world_file` (landmarks + start
+  pose for the EKF, optional `clearance_guard`) and `initial_pose`. `ros2 run robot_control hw4
+  plan|sim|eval|list` (`hw4_tool.py`); `launch/hw4_launch.py mode:=fast|safe` plans at launch
+  into `<workspace>/hw4_logs/<mode>_<date>/` with `config/hw4.yaml` node params.
 
 ### `robot_vision` (ament_cmake)
 
