@@ -45,8 +45,8 @@ velocity_control_node:
     search_max_turn: 6.3
     k_v: 1.26
     k_w: 1.26
-    max_v: 0.25
-    min_v: 0.19
+    max_v: 0.35
+    min_v: 0.25
     max_w: 1.6
     min_w: 1.1
     # Tighter than HW2/3 (0.5): the lateral drift before the robot re-turns is about
