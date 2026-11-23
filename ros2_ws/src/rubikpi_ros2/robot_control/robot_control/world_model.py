@@ -40,7 +40,7 @@ class World:
     robot_radius: float
     start: tuple                     # (x, y, theta)
     goal: tuple                      # (x, y, theta or nan: keep the arrival heading)
-    landmarks: dict = field(default_factory=dict)   # id -> (x, y, yaw)
+    landmarks: dict = field(default_factory=dict)   # id or family:id -> (x, y, yaw)
     planner: dict = field(default_factory=dict)     # raw 'planner' section of the yaml
     source: str = ''
 
@@ -151,6 +151,9 @@ def world_from_dict(data, source=''):
         landmarks = {}
         for lm in data.get('landmarks') or []:
             tag = int(lm['id'])
+            family = lm.get('family', '36h11')
+            if family != '36h11':
+                tag = f'{family}:{tag}'
             if tag in landmarks:
                 raise WorldError(f'landmark id {tag} is listed twice')
             landmarks[tag] = (float(lm['x']), float(lm['y']), float(lm['yaw']))

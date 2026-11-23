@@ -239,7 +239,8 @@ class VelocityControlNode(Node):
         if self.use_slam:
             return
         self.get_logger().info(f'Localizing with {len(self.landmarks)} landmarks from {path}')
-        for tag_id, (lx, ly, lyaw) in sorted(self.landmarks.items()):
+        for tag_id in sorted(self.landmarks, key=lambda tag: (isinstance(tag, str), tag)):
+            lx, ly, lyaw = self.landmarks[tag_id]
             self.get_logger().info(f'  tag {tag_id}: x={lx:.2f} y={ly:.2f} yaw={lyaw:.2f}')
 
     def setup_slam_logs(self, log_dir, gains, noise_defaults):
@@ -336,7 +337,12 @@ class VelocityControlNode(Node):
         for tf in msg.transforms:
             if tf.header.frame_id != self.camera_frame:
                 continue
-            tag_id = parse_tag_id(tf.child_frame_id)
+            frame = tf.child_frame_id
+            if (self.world is not None and not self.use_slam
+                    and ':' in frame and not frame.startswith('36h11:')):
+                tag_id = frame
+            else:
+                tag_id = parse_tag_id(frame)
             if tag_id is None or (not self.use_slam and tag_id not in self.landmarks):
                 continue
             t, q = tf.transform.translation, tf.transform.rotation

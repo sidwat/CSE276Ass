@@ -234,7 +234,8 @@ def simulate(world, waypoints, params, seed=0, dt=0.05, camera_period=0.1, half_
 
         if t >= next_camera:
             next_camera = t + camera_period
-            for tag, lm in sorted(world.landmarks.items()):
+            for tag in sorted(world.landmarks, key=lambda tag: (isinstance(tag, str), tag)):
+                lm = world.landmarks[tag]
                 z = sense(true, lm, half_fov, max_range, math.radians(70))
                 if z is None:
                     continue

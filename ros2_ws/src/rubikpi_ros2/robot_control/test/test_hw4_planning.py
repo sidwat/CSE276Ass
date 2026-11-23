@@ -59,7 +59,12 @@ def test_c_obstacle_polygon_contains_the_rounded_box():
 
 def test_world_yaml_loads_and_endpoints_are_valid():
     w = load_world(os.path.join(CONFIG, 'hw4_world.yaml'))
-    assert len(w.boxes) == 1 and len(w.landmarks) == 12
+    assert len(w.boxes) == 1 and len(w.landmarks) == 11
+    assert w.landmarks['Standard41h12:1'] == (1.12, 1.60, 3.1416)
+    assert w.landmarks['Standard41h12:2'] == (1.44, 1.92, 1.5708)
+    assert w.landmarks['Standard41h12:3'] == (1.75, 1.60, 0.0)
+    assert w.landmarks[1][:2] == (2.00, 3.04)
+    assert w.landmarks[3][:2] == (0.96, 3.04)
     assert w.start[0] + w.start[1] == pytest.approx(w.size, abs=0.01)  # on the diagonal
     w.check_endpoints(w.robot_radius + 0.08)
 

@@ -9,12 +9,12 @@
 # 1 ft = 0.3048 m.
 
 arena:
-  size: 3.048              # m, side of the square arena (10 ft)
+  size: 3              # m, side of the square arena (10 ft)
 
 # Axis-aligned boxes. HW4 asks for one 1x1 to 2x2 ft box in the middle; more boxes also work.
 obstacles:
-  - center: [1.524, 1.524] # m, middle of the arena
-    size: [0.6096, 0.6096] # m, 2 ft x 2 ft (1.5 ft = 0.4572, 1 ft = 0.3048)
+  - center: [1.44, 1.60] # m, middle of the arena
+    size: [0.61, 0.61] # m, 2 ft x 2 ft (1.5 ft = 0.4572, 1 ft = 0.3048)
 
 robot:
   # Distance from the point the robot turns about (midpoint of the wheel axle, the point the EKF
@@ -24,15 +24,15 @@ robot:
 
 # Start and goal on the arena diagonal (x + y = size), as in the HW4 figure: start near the
 # south-east corner, goal near the north-west corner, both 1.5 ft from the two walls.
-# theta of the start: the heading the robot is placed with (north sees tags 7 and 10).
-# theta of the goal: final heading; facing the arena centre lets box tags 11/12 confirm it.
+# theta of the start: the heading the robot is placed with (north sees wall tag 7).
+# theta of the goal: final heading; facing the arena centre lets the box tags confirm it.
 # Use null to keep the heading the robot arrives with.
-start: [2.59, 0.46, 1.5708]
-goal: [0.46, 2.59, -0.7854]
+start: [2.35, 0.65, 2.3562]
+goal: [0.70, 2.35, -0.7854]
 
-# AprilTag landmarks (tag family 36h11, 0.173 m). x, y = tag centre; yaw = the direction its
-# printed face points (into the arena). Mount every tag upright with its centre at camera height.
-# Every id must be listed in apriltag_ros/cfg/tags_36h11.yaml (ids 0-29 are).
+# AprilTag landmarks (0.173 m). The default family is 36h11.
+# x, y = tag centre; yaw = the direction its printed face points (into the arena).
+# Mount every tag upright with its centre at camera height.
 landmarks:
   # Wall tags: measured HW3 setup, 2026-11-12 (config/landmarks_hw3_gt.txt), two per wall
   - {id: 0, x: 3.05, y: 0.96, yaw: 3.1416}     # east wall, south
@@ -43,11 +43,10 @@ landmarks:
   - {id: 8, x: 0.04, y: 0.96, yaw: 0.0}        # west wall, south
   - {id: 9, x: 0.97, y: -0.04, yaw: 1.5708}    # south wall, west
   - {id: 5, x: 1.98, y: -0.04, yaw: 1.5708}    # south wall, east
-  # Box tags: centre of each face of the 2 ft box, facing outward. Re-measure after building it.
-  - {id: 10, x: 1.8288, y: 1.524, yaw: 0.0}       # east face
-  - {id: 11, x: 1.524, y: 1.8288, yaw: 1.5708}    # north face
-  - {id: 12, x: 1.2192, y: 1.524, yaw: 3.1416}    # west face
-  - {id: 13, x: 1.524, y: 1.2192, yaw: -1.5708}   # south face
+  # Box tags face outward.
+  - {id: 1, family: Standard41h12, x: 1.12, y: 1.60, yaw: 3.1416}  # west face
+  - {id: 2, family: Standard41h12, x: 1.44, y: 1.92, yaw: 1.5708}  # north face
+  - {id: 3, family: Standard41h12, x: 1.75, y: 1.60, yaw: 0.0}     # east face
 
 planner:
   # Robot motion used to estimate travel time (match config/hw4.yaml: max_v, min_w..max_w,

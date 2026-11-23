@@ -79,6 +79,24 @@ def launch_setup(context):
             target_action=velocity_node,
             on_exit=[Shutdown(reason='Waypoint follower exited')])),
     ]
+    obstacle_ids = sorted(int(tag.split(':', 1)[1]) for tag in world.landmarks
+                          if isinstance(tag, str) and tag.startswith('Standard41h12:'))
+    if obstacle_ids:
+        actions.append(Node(
+            package='apriltag_ros',
+            executable='apriltag_node',
+            name='obstacle_apriltag_node',
+            remappings=[('image_rect', '/camera/image_raw'),
+                        ('camera_info', '/camera/camera_info')],
+            parameters=[
+                PathJoinSubstitution([FindPackageShare('apriltag_ros'), 'cfg', 'tags_36h11.yaml']),
+                {'family': 'Standard41h12',
+                 'tag.ids': obstacle_ids,
+                 'tag.frames': [f'Standard41h12:{tag}' for tag in obstacle_ids],
+                 'tag.sizes': [0.173] * len(obstacle_ids)},
+            ],
+            output='screen',
+        ))
     if arg('record_bag').lower() == 'true':
         topics = list(BAG_TOPICS)
         if arg('record_images').lower() == 'true':
