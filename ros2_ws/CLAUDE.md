@@ -68,6 +68,13 @@ Drives the physical robot through a separate, non-ROS motor-controller board ove
   The turn-drive-turn control logic lives in the ROS-free `waypoint_controller.py` so it can be unit
   tested in simulation. `launch/waypoint_launch.py` starts it together with `motor_control`.
 - `config/waypoints.txt` is a symlink to the repo-root `waypoints.txt`.
+- HW4 (path planning, known map): `config/hw4_world.yaml` (arena, box, tags, robot radius,
+  start/goal; the one file to edit) is read by the ROS-free planners `visibility_planner.py`
+  (fast: C-space visibility graph + time-cost A*) and `gvd_planner.py` (safe: GVD + Dijkstra),
+  via `hw4_plan.make_plan`. `launch/hw4_launch.py mode:=fast|safe` plans at launch into a run
+  folder under `<workspace>/hw4_logs`. The `hw4` CLI (`hw4_tool.py`) runs check / plan / sim /
+  eval / summary. Waypoint theta `nan` = pass-through (no stop) in `waypoint_controller.py`;
+  `velocity_control` starts the EKF at `start_pose` when `use_slam` is false.
 
 ### `robot_vision` (ament_cmake)
 

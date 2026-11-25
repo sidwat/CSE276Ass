@@ -29,7 +29,7 @@ def parse_tag_id(frame):
 
 class VelocityControlNode(Node):
     """
-    Follow the waypoints in a file, starting from pose (0, 0, 0).
+    Follow the waypoints in a file, starting from pose (0, 0, 0) (or start_pose, see below).
 
     There are no wheel encoders, so position is dead-reckoned from the commanded wheel speeds
     (speed_per_unit and wheel_base must be calibrated). Heading is either dead-reckoned too or,
@@ -43,6 +43,11 @@ class VelocityControlNode(Node):
     With use_slam:=true as well (HW3), the EKF is EKF-SLAM (robot_control/slam.py): no landmarks
     file is read, each tag enters the state once confirmed, and the map, its covariance and every
     sighting are logged for evaluate_slam (robot_control/slam_logger.py).
+
+    HW4 (known map, use_slam:=false): with start_pose set, the pose estimate and the EKF start
+    at that world pose, so waypoints, landmarks and obstacles share one world frame. With
+    world_file set too, an optional clearance guard stops the run if the estimate says the
+    robot body is about to touch an obstacle (robot_control/hw4_world.py).
     """
 
     def __init__(self):
@@ -80,6 +85,14 @@ class VelocityControlNode(Node):
         self.declare_parameter('start_pose', '')        # 'x,y,theta' world start, for start_pose
         self.declare_parameter('post_run_eval', False)  # run evaluate_slam when the run ends
         self.declare_parameter('gt_file', '')           # ground truth for that evaluation
+        self.declare_parameter('post_run_tool', 'hw3_tool')  # module run as '<tool> eval RUN'
+        # HW4 (known map): start the EKF at start_pose, with this uncertainty
+        self.declare_parameter('start_std_xy', 0.02)    # m
+        self.declare_parameter('start_std_theta', 0.02)  # rad (hw4.yaml: 0.05)
+        self.declare_parameter('world_file', '')        # hw4_world.yaml, for the guard
+        self.declare_parameter('clearance_guard', False)  # stop if the body nears an obstacle
+        self.declare_parameter('guard_margin', 0.0)     # m: stop when clearance < radius + this
+        self.declare_parameter('guard_cycles', 3)       # ... for this many control cycles
         defaults = Gains()
         for name, value in vars(defaults).items():
             self.declare_parameter(name, value)
@@ -119,14 +132,18 @@ class VelocityControlNode(Node):
         self.search_inflate = float(self.get_parameter('search_inflate').value)
         self.waypoints_file = path
 
-        # Pose estimate in the start frame, and the body velocity actually being commanded
-        self.x = 0.0
-        self.y = 0.0
-        self.theta = 0.0
+        # Pose estimate (start frame, or the world frame with start_pose and a known map), and
+        # the body velocity actually being commanded
+        self.start_pose = self.parse_start_pose()
+        self.world_start = self.start_pose is not None and not self.use_slam
+        x0, y0, t0 = self.start_pose if self.world_start else (0.0, 0.0, 0.0)
+        self.x = x0
+        self.y = y0
+        self.theta = t0
         # Motion model alone (commanded velocities, never corrected), logged for comparison, and
         # the motion model's prediction since the last log line, from the EKF pose at that line
-        self.odom = [0.0, 0.0, 0.0]
-        self.prediction = [0.0, 0.0, 0.0]
+        self.odom = [x0, y0, t0]
+        self.prediction = [x0, y0, t0]
         self.v = 0.0
         self.w = 0.0
 
@@ -145,6 +162,11 @@ class VelocityControlNode(Node):
         self.updates = 0  # accepted re-observations since the last trajectory row
         if self.use_vision:
             self.setup_vision(noise_defaults, slam_defaults)
+        self.run_dir = None
+        self.world = None
+        self.guard_count = 0
+        self.guard_tripped = False
+        self.setup_guard()
 
         self.publisher = self.create_publisher(Float32MultiArray, 'motor_commands', 10)
 
@@ -186,7 +208,13 @@ class VelocityControlNode(Node):
                 raise RuntimeError('landmarks_file parameter is required with use_vision')
             self.landmarks = load_landmarks(path)
             self.landmarks_file = path
-            self.ekf = PoseEKF(noise=noise)
+            sxy = float(self.get_parameter('start_std_xy').value)
+            sth = float(self.get_parameter('start_std_theta').value)
+            self.ekf = PoseEKF(self.x, self.y, self.theta, initial_std=(sxy, sxy, sth),
+                               noise=noise)
+            if self.world_start:
+                self.get_logger().info(
+                    'EKF starts at the world pose ({:.3f}, {:.3f}, {:.3f})'.format(*self.ekf.pose))
         self.camera_frame = self.get_parameter('camera_frame').value
         self.camera_pose = tuple(float(self.get_parameter(name).value)
                                  for name in ('camera_x', 'camera_y', 'camera_yaw'))
@@ -211,17 +239,8 @@ class VelocityControlNode(Node):
             'waypoints_per_lap': self.waypoints_per_lap,
             'params': {**{n: self.get_parameter(n).value for n in names}, **vars(gains)},
         }
-        start = None
-        start_text = str(self.get_parameter('start_pose').value).strip()
-        if start_text:
-            try:
-                start = tuple(float(v) for v in start_text.replace(',', ' ').split())
-                if len(start) != 3:
-                    raise ValueError
-            except ValueError:
-                self.get_logger().warn(f'start_pose {start_text!r} is not "x,y,theta"; ignored')
-                start = None
-        self.slam_log = SLAMRunLogger(log_dir, info, self.waypoints_file, start_pose=start,
+        self.slam_log = SLAMRunLogger(log_dir, info, self.waypoints_file,
+                                      start_pose=self.start_pose,
                                       run_name=self.get_parameter('run_name').value or None)
         self.log_period = float(self.get_parameter('log_period').value)
         self.log_start = self.slam_log.t0
@@ -229,6 +248,51 @@ class VelocityControlNode(Node):
         self.get_logger().info(
             f'Logging to {self.slam_log.run_dir}. After the run, write the tape-measured world '
             f'start pose into {self.slam_log.path("start_pose.txt")}')
+
+    def parse_start_pose(self):
+        start_text = str(self.get_parameter('start_pose').value).strip()
+        if not start_text:
+            return None
+        try:
+            start = tuple(float(v) for v in start_text.replace(',', ' ').split())
+            if len(start) == 3:
+                return start
+        except ValueError:
+            pass
+        self.get_logger().warn(f'start_pose {start_text!r} is not "x,y,theta"; ignored')
+        return None
+
+    def setup_guard(self):
+        path = self.get_parameter('world_file').value
+        if not path or not bool(self.get_parameter('clearance_guard').value):
+            return
+        if not self.world_start:
+            self.get_logger().warn('clearance_guard needs start_pose and use_slam:=false '
+                                   '(the estimate must be in the world frame); disabled')
+            return
+        from robot_control.hw4_world import load_world
+        self.world = load_world(path)
+        self.guard_limit = (self.world.robot_radius
+                            + float(self.get_parameter('guard_margin').value))
+        self.guard_cycles = int(self.get_parameter('guard_cycles').value)
+        self.get_logger().info(
+            f'Clearance guard on: stop if the estimated clearance stays below '
+            f'{self.guard_limit:.3f} m for {self.guard_cycles} cycles')
+
+    def check_guard(self):
+        """Return True (and stop for good) if the estimate is too close to an obstacle."""
+        if self.world is None:
+            return False
+        clearance = float(self.world.clearance(self.x, self.y))
+        self.guard_count = self.guard_count + 1 if clearance < self.guard_limit else 0
+        if self.guard_count < self.guard_cycles:
+            return False
+        self.get_logger().error(
+            f'CLEARANCE GUARD: estimated pose ({self.x:.3f}, {self.y:.3f}) is {clearance:.3f} m '
+            f'from an obstacle (limit {self.guard_limit:.3f}); stopping the run')
+        self.guard_tripped = True
+        self.finished = True
+        return True
 
     def setup_markers(self):
         from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -243,19 +307,23 @@ class VelocityControlNode(Node):
         self.create_timer(0.5, self.publish_markers)
 
     def setup_logs(self, log_dir):
-        run_dir = os.path.join(log_dir, time.strftime('run_%Y%m%d_%H%M%S'))
+        name = self.get_parameter('run_name').value or time.strftime('run_%Y%m%d_%H%M%S')
+        run_dir = os.path.join(log_dir, name)
         os.makedirs(run_dir, exist_ok=True)
+        self.run_dir = run_dir
         self.trajectory_file = open(os.path.join(run_dir, 'trajectory.csv'), 'w', newline='')
         self.trajectory_log = csv.writer(self.trajectory_file)
         self.trajectory_log.writerow(
             ['t', 'x', 'y', 'theta', 'std_x', 'std_y', 'std_theta', 'waypoint', 'tags_seen',
-             'odom_x', 'odom_y', 'odom_theta', 'pred_x', 'pred_y', 'pred_theta'])
+             'odom_x', 'odom_y', 'odom_theta', 'pred_x', 'pred_y', 'pred_theta', 'v', 'w'])
         self.waypoint_file = open(os.path.join(run_dir, 'waypoints.csv'), 'w', newline='')
         self.waypoint_log = csv.writer(self.waypoint_file)
         self.waypoint_log.writerow(
             ['index', 't', 'goal_x', 'goal_y', 'goal_theta', 'x', 'y', 'theta'])
         if self.ekf is not None:
-            shutil.copy(self.landmarks_file, os.path.join(run_dir, 'landmarks.txt'))
+            dst = os.path.join(run_dir, 'landmarks.txt')
+            if not os.path.exists(dst) or not os.path.samefile(self.landmarks_file, dst):
+                shutil.copy(self.landmarks_file, dst)
             # Every tag sighting next to what the current estimate predicted, for debugging
             self.measurement_file = open(
                 os.path.join(run_dir, 'measurements.csv'), 'w', newline='')
@@ -358,6 +426,9 @@ class VelocityControlNode(Node):
         if now < self.hold_until or self.finished:
             self.send(0.0, 0.0)
             return
+        if self.check_guard():
+            self.send(0.0, 0.0)
+            return
         if self.use_imu and self.imu_yaw is None:
             self.get_logger().info('Waiting for IMU data...', throttle_duration_sec=2.0)
             self.send(0.0, 0.0)
@@ -387,7 +458,8 @@ class VelocityControlNode(Node):
                 self.waypoint_file.flush()
             if self.slam_log:
                 self.log_slam_waypoint(reached)
-            self.hold_until = now + self.pause_at_waypoint
+            if not self.controller.is_pass_through(reached):
+                self.hold_until = now + self.pause_at_waypoint
         if self.controller.done:
             self.get_logger().info('All waypoints reached')
             self.finished = True
@@ -447,7 +519,7 @@ class VelocityControlNode(Node):
             [f'{now - self.log_start:.2f}', f'{self.x:.4f}', f'{self.y:.4f}', f'{self.theta:.4f}',
              f'{std[0]:.4f}', f'{std[1]:.4f}', f'{std[2]:.4f}',
              self.controller.index, self.tags_seen]
-            + [f'{v:.4f}' for v in (*self.odom, *self.prediction)])
+            + [f'{v:.4f}' for v in (*self.odom, *self.prediction, self.v, self.w)])
         self.trajectory_file.flush()
         self.tags_seen = 0
         self.prediction = [self.x, self.y, self.theta]
@@ -549,6 +621,10 @@ class VelocityControlNode(Node):
             self.waypoint_file.close()
         if self.measurement_log:
             self.measurement_file.close()
+        if self.run_dir:
+            self.write_run_end()
+            if bool(self.get_parameter('post_run_eval').value):
+                self.start_post_run_eval(self.run_dir)
         if self.slam_log:
             t = self.slam_log.now()
             self.slam_log.finish(self.ekf, t, self.controller.done)
@@ -560,13 +636,27 @@ class VelocityControlNode(Node):
             self.slam_log = None
         super().destroy_node()
 
+    def write_run_end(self):
+        import json
+        info = {'finished': self.controller.done, 'guard_tripped': self.guard_tripped,
+                'waypoints_reached': self.controller.index,
+                'waypoints_total': len(self.controller.waypoints),
+                'ended': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'final_estimate': [self.x, self.y, self.theta]}
+        try:
+            with open(os.path.join(self.run_dir, 'run_end.json'), 'w') as f:
+                json.dump(info, f, indent=2)
+        except OSError:
+            pass
+
     def start_post_run_eval(self, run_dir):
         """Post-run hook: evaluate the run in a detached process (survives launch shutdown)."""
         import subprocess
         import sys
-        cmd = [sys.executable, '-m', 'robot_control.hw3_tool', 'eval', run_dir, '--quiet']
+        tool = self.get_parameter('post_run_tool').value
+        cmd = [sys.executable, '-m', f'robot_control.{tool}', 'eval', run_dir, '--quiet']
         gt = self.get_parameter('gt_file').value
-        if gt:
+        if gt and tool == 'hw3_tool':
             cmd += ['--gt', gt]
         try:
             with open(os.path.join(run_dir, 'eval.log'), 'w') as log:

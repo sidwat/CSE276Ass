@@ -1,0 +1,105 @@
+# =================================================================================================
+# HW4 WORLD: fill in the MEASURED values (every line marked  <-- MEASURE).
+#
+# Both planners, the simulator, the evaluation and the robot's EKF read this file:
+#   ros2 run robot_control hw4 check            # sanity-check it (after editing; no rebuild needed)
+#   ros2 run robot_control hw4 plan             # plans + figures into <workspace>/hw4_plans
+#   ros2 launch robot_control hw4_launch.py mode:=fast     (or mode:=safe)
+#
+# Frame: the HW3 ground-truth frame. Origin at the south-west arena corner, x east, y north,
+# metres, radians, yaw counter-clockwise from +x (0 = east, pi/2 = north, pi = west, -pi/2 = south).
+# Angles may be written as expressions: 3*pi/4, -pi/2, 135*deg.
+#
+# The robot is modelled as a DISK about its rotation centre (the midpoint of the wheel axle, the
+# point the EKF tracks and camera_x is measured from).
+# =================================================================================================
+
+# Inner faces of the four walls (where the robot body would touch). HW3 took the arena as
+# 3.0 m x 3.0 m with these corners; re-measure: the HW3 wall tags sit at -0.04 / 3.05.
+arena:
+  x_min: 0.0      # <-- MEASURE west wall
+  x_max: 3.0      # <-- MEASURE east wall
+  y_min: 0.0      # <-- MEASURE south wall
+  y_max: 3.0      # <-- MEASURE north wall
+
+# The obstacle: an axis-aligned box (1x1 to 2x2 ft) in the middle of the arena.
+obstacle:
+  center: [1.50, 1.50]    # <-- MEASURE box centre (x, y)
+  size: [0.61, 0.61]      # <-- MEASURE side lengths along x and y (2 ft = 0.61, 1 ft = 0.305)
+  # One tag centred on each face, printed side outward, at camera height (centre 12 cm above
+  # the floor, so the box must be > ~22 cm tall). These ids get their pose computed from the box
+  # (face centre, facing outward). To use a MEASURED pose instead, also list the id under
+  # `landmarks` below: an entry there always wins. Use null to drop a face.
+  # Every id must be in apriltag_ros/cfg/tags_36h11.yaml (0-29 are).
+  face_tags:
+    east: 10
+    north: 11
+    west: 12
+    south: 13
+
+# Robot footprint: distance from the rotation centre to the FARTHEST point of the chassis
+# (wheels, camera mount, battery, anything). It sets the configuration-space growth directly.
+robot:
+  radius: 0.13            # <-- MEASURE
+
+# Start and goal on the diagonal (start near the south-east corner, goal near the north-west).
+# Place the robot on the start mark facing `theta` for every run.
+start: [2.54, 0.46, pi/2]   # <-- MEASURE x, y, heading (here: 1.5 ft from both walls, facing north)
+goal: [0.46, 2.54, null]    # <-- MEASURE x, y, final heading (null = the heading nearest the
+                            #     arrival direction with a tag in view, see camera.confirm_heading)
+
+# Tag map (the robot knows it): [id, x, y, yaw], yaw = direction the printed face points.
+# Prefilled with the 8 wall tags of config/landmarks_hw3_gt.txt (HW3, measured 2026-11-12).
+landmarks:                  # <-- MEASURE (re-check the wall tags; add box tags here to override)
+  - [0, 3.05, 0.96, pi]
+  - [7, 3.01, 2.03, pi]
+  - [1, 2.00, 3.04, -pi/2]
+  - [3, 0.96, 3.04, -pi/2]
+  - [4, -0.04, 2.04, 0.0]
+  - [8, 0.04, 0.96, 0.0]
+  - [9, 0.97, -0.04, pi/2]
+  - [5, 1.98, -0.04, pi/2]
+  # - [10, 1.805, 1.50, 0.0]      # e.g. a measured east-face tag
+
+# ------------------------------------------------------------------------------------------------
+# Planner settings (defaults are sensible; tune after looking at `hw4 plan` and the sim).
+# ------------------------------------------------------------------------------------------------
+fast:                       # minimum time: C-space visibility graph + A* with a time cost
+  margin: 0.10              # m added to robot.radius for execution error (EKF sigma, tracking,
+                            # tape error). ~8-10 cm; lower it only if the logged sigma supports it
+  polygon_k: 2              # segments per rounded C-obstacle corner (2 = octagon)
+  pass_through: true        # intermediate vertices without stopping (theta = nan)
+  merge_corners: true       # replace a corner's k vertices with one point when that saves time
+
+safe:                       # maximum clearance: GVD on a clearance grid + Dijkstra
+  resolution: 0.02          # m per grid cell
+  min_margin: 0.05          # m: cells with body gap below this are not free
+  rdp_epsilon: 0.03         # m: path simplification tolerance (clearance drops at most this)
+  min_leg: 0.15             # m: merge legs shorter than this (the controller needs > 0.1 m to
+                            # drive a leg) while the path stays within 2 * rdp_epsilon of the GVD
+
+weighted:                   # comparison only: grid A* minimising integral (1 + alpha/d) ds
+  alpha: 0.3
+  resolution: 0.02
+  rdp_epsilon: 0.03
+  min_leg: 0.15
+  tradeoff_alphas: [0.0, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0]
+
+# Time model used by the fast planner's cost and the estimates; keep v/w in line with hw4.yaml.
+timing:
+  v: 0.25                   # m/s cruise (hw4.yaml max_v)
+  w: 1.3                    # rad/s typical in-place turn rate (between min_w and max_w)
+  t_stop: 1.5               # s per stop waypoint (settle_time + pause_at_waypoint)
+  t_pass: 0.3               # s lost per pass-through vertex
+
+# Camera model: which tags are in view from a pose. Used by `hw4 check`, `hw4 sim` and, with
+# confirm_heading, by the planners to choose the heading of each STOP waypoint.
+camera:
+  half_fov: 0.6             # rad, half the horizontal field of view   <-- MEASURE (conservative)
+  max_range: 2.5            # m (hw4.yaml max_tag_range)
+  max_facing: 1.05          # rad: tags seen more obliquely than this are not detected
+  # At every stop the robot settles and needs a tag sighting to confirm its heading; with none in
+  # view it SEARCHes (turns in steps), costing ~20 s per stop. true: each stop's heading becomes
+  # the one nearest the path direction that has a tag in view (the robot then turns back to the
+  # next leg after the settle). An explicit goal heading is never changed.
+  confirm_heading: true
