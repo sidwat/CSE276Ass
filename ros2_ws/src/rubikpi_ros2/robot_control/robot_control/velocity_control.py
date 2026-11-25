@@ -50,6 +50,11 @@ class VelocityControlNode(Node):
     world frame too. initial_pose overrides the start pose. A waypoint with theta nan is driven
     through without stopping. With clearance_guard the robot stops if the estimated pose comes
     within guard_gap of touching an obstacle of the world for guard_cycles control cycles.
+
+    HW4 extra credit (use_slam + world_file + slam_plan_mode fast|safe): EKF-SLAM starts at the
+    world start pose and maps every tag; the obstacle is NOT taken from the world file but
+    estimated from the mapped obstacle tags, and the path is (re)planned on that estimate as the
+    map grows (robot_control/slam_obstacle.py). The clearance guard uses the estimate too.
     """
 
     def __init__(self):
@@ -92,6 +97,7 @@ class VelocityControlNode(Node):
         self.declare_parameter('clearance_guard', False)  # stop if the estimate hits the world
         self.declare_parameter('guard_gap', -0.02)      # m of body gap that trips it (<0: overlap)
         self.declare_parameter('guard_cycles', 6)       # consecutive cycles before it trips
+        self.declare_parameter('slam_plan_mode', '')    # HW4 + SLAM: 'fast' or 'safe' replanning
         defaults = Gains()
         for name, value in vars(defaults).items():
             self.declare_parameter(name, value)
@@ -166,13 +172,28 @@ class VelocityControlNode(Node):
         self.rejected_in_row = 0
         self.slam_log = None
         self.updates = 0  # accepted re-observations since the last trajectory row
+        self.slam_planner = None
         if self.use_vision:
             self.setup_vision(noise_defaults, slam_defaults)
+        mode = str(self.get_parameter('slam_plan_mode').value).strip()
+        if mode:
+            if not (self.use_slam and self.world is not None):
+                raise RuntimeError('slam_plan_mode needs use_slam:=true and a world_file')
+            from robot_control.slam_obstacle import SlamPlanner
+            self.slam_planner = SlamPlanner(self.world, mode, self.slam_cfg)
+            self.replans = 0
+            self.last_estimate_log = -math.inf
+            self.estimate_file = None
+            self.get_logger().info(
+                f'SLAM {mode} planning: the obstacle is mapped, not read from the world file '
+                f'(prior: centre {self.slam_cfg.prior_center} +- '
+                f'{self.slam_cfg.center_tolerance} m, sides <= {self.slam_cfg.max_size} m)')
 
         self.publisher = self.create_publisher(Float32MultiArray, 'motor_commands', 10)
 
         now = time.monotonic()
         self.last_time = now
+        self.log_start = now  # the run clock (the SLAM logger resets it to its own start)
         self.hold_until = now + float(self.get_parameter('start_delay').value)
         self.finished = False
         self.timer = self.create_timer(
@@ -217,6 +238,16 @@ class VelocityControlNode(Node):
                                    for name, value in vars(slam_defaults).items()})
             self.ekf = EKFSLAM(noise=noise, params=params)
             self.get_logger().info(f'EKF-SLAM with an empty map: {params}')
+            if self.world is not None:
+                # HW4: the map frame is the world frame, so plans and walls line up
+                from robot_control.slam_obstacle import seed_known_walls, SlamConfig
+                self.slam_cfg = SlamConfig.from_world(self.world)
+                self.ekf.set_pose(self.initial_pose)
+                known = seed_known_walls(self.ekf, self.world, self.slam_cfg)
+                self.get_logger().info(
+                    'EKF-SLAM starts at the world pose ({:.3f}, {:.3f}, {:.3f}); '.format(
+                        *self.initial_pose)
+                    + (f'known wall tags {known}' if known else 'every tag is mapped'))
         elif self.world is not None and self.world.landmarks:
             path = self.world_file
             self.landmarks = dict(self.world.landmarks)
@@ -338,7 +369,7 @@ class VelocityControlNode(Node):
             if tf.header.frame_id != self.camera_frame:
                 continue
             frame = tf.child_frame_id
-            if (self.world is not None and not self.use_slam
+            if (self.world is not None
                     and ':' in frame and not frame.startswith('36h11:')):
                 tag_id = frame
             else:
@@ -426,6 +457,9 @@ class VelocityControlNode(Node):
             self.send(0.0, 0.0)
             return
 
+        if self.slam_planner is not None:
+            self.slam_replan(now)
+
         # Without the camera, any heading counts; with it, only one a tag was seen at
         confirmed = (self.ekf is None
                      or now - self.last_fix <= max(self.controller.gains.settle_time, 0.5))
@@ -459,16 +493,67 @@ class VelocityControlNode(Node):
             self.finished = True
         self.send(v, w)
 
+    def slam_replan(self, now):
+        """HW4 + SLAM: re-estimate the obstacle from the map; swap in a new plan if needed."""
+        t = now - self.log_start
+        c = self.controller
+        wps = self.slam_planner.update(t, self.ekf.pose, self.ekf.landmarks(),
+                                       remaining=c.waypoints[c.index:])
+        est = self.slam_planner.latest
+        if self.slam_log and t - self.last_estimate_log >= self.log_period:
+            self.last_estimate_log = t
+            self.log_estimate(t, est)
+        entry = self.slam_planner.history[-1] if self.slam_planner.history else None
+        if wps is None:
+            if entry is not None and not entry['ok'] and entry.get('logged') is None:
+                entry['logged'] = True
+                self.get_logger().warn(f'Replanning failed ({entry["note"]}); keeping the plan')
+                self.save_replans()
+            return
+        self.replans += 1
+        self.controller = WaypointController(wps, c.gains)
+        self.get_logger().info(
+            f'Plan {self.replans} ({entry["reason"]}): obstacle x [{est.x_min:.2f}, '
+            f'{est.x_max:.2f}] y [{est.y_min:.2f}, {est.y_max:.2f}] from faces '
+            f'{sorted(est.faces) or "none (prior)"}; {len(wps)} waypoints, '
+            f'{entry["length"]:.2f} m' + (f' ({entry["note"]})' if entry['note'] else ''))
+        if self.slam_log:
+            self.slam_log.snapshot(f'plan{self.replans}', 0, t, self.ekf)
+        self.save_replans()
+
+    def log_estimate(self, t, est):
+        import csv as _csv
+        if self.estimate_file is None:
+            self.estimate_file = open(self.slam_log.path('obstacle_estimates.csv'), 'w',
+                                      newline='')
+            self.estimate_writer = _csv.writer(self.estimate_file)
+            self.estimate_writer.writerow(['t', 'x_min', 'x_max', 'y_min', 'y_max', 'source',
+                                           'faces', 'n_obstacle_tags', 'n_landmarks'])
+        self.estimate_writer.writerow(
+            [f'{t:.2f}'] + [f'{v:.4f}' for v in est.bounds()]
+            + [est.source, ' '.join(sorted(est.faces)), len(est.tags), self.ekf.n_landmarks])
+        self.estimate_file.flush()
+
+    def save_replans(self):
+        if not self.slam_log:
+            return
+        import json
+        with open(self.slam_log.path('replans.json'), 'w') as f:
+            json.dump(self.slam_planner.history, f, indent=1, default=str)
+
     def check_clearance(self):
         """Stop the run if the estimated body overlaps an obstacle for guard_cycles cycles."""
-        gap = self.world.clearance_at(self.x, self.y) - self.world.robot_radius
+        # With SLAM planning the robot does not know the true box: guard against its estimate
+        world = (self.slam_planner.guard_world() if self.slam_planner is not None
+                 else self.world)
+        gap = world.clearance_at(self.x, self.y) - world.robot_radius
         self.guard_count = self.guard_count + 1 if gap < self.guard_gap else 0
         if self.guard_count < self.guard_cycles:
             return False
-        d, lab = self.world.clearance(self.x, self.y)
+        d, lab = world.clearance(self.x, self.y)
         self.get_logger().error(
             f'Clearance guard: estimated pose ({self.x:.2f}, {self.y:.2f}) leaves a body gap of '
-            f'{gap:.3f} m to the {self.world.label_name(int(lab))}; stopping the run')
+            f'{gap:.3f} m to the {world.label_name(int(lab))}; stopping the run')
         self.finished = True
         self.send(0.0, 0.0)
         return True
@@ -634,12 +719,23 @@ class VelocityControlNode(Node):
             self.measurement_file.close()
         if self.slam_log:
             t = self.slam_log.now()
-            self.slam_log.finish(self.ekf, t, self.controller.done)
+            extra = None
+            if self.slam_planner is not None:
+                self.save_replans()
+                if self.estimate_file is not None:
+                    self.estimate_file.close()
+                est = self.slam_planner.latest
+                extra = {'slam_plan_mode': self.slam_planner.mode, 'plans': self.replans,
+                         'guard_tripped': self.guard_count >= self.guard_cycles,
+                         'final_obstacle_estimate': est.to_dict() if est else None}
+            self.slam_log.finish(self.ekf, t, self.controller.done, extra)
             self.get_logger().info(
                 f'SLAM run saved to {self.slam_log.run_dir}: {self.ekf.n_landmarks} landmarks '
-                f'{sorted(self.ekf.index)}, sightings {self.ekf.counts}')
+                f'{sorted(self.ekf.index, key=str)}, sightings {self.ekf.counts}')
             if bool(self.get_parameter('post_run_eval').value):
-                self.start_post_run_eval(self.slam_log.run_dir)
+                tool = ('robot_control.hw4_slam_tool' if self.slam_planner is not None
+                        else 'robot_control.hw3_tool')
+                self.start_post_run_eval(self.slam_log.run_dir, tool=tool)
             self.slam_log = None
         super().destroy_node()
 

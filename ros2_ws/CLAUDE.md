@@ -79,6 +79,14 @@ Drives the physical robot through a separate, non-ROS motor-controller board ove
   pose for the EKF, optional `clearance_guard`) and `initial_pose`. `ros2 run robot_control hw4
   plan|sim|eval|list` (`hw4_tool.py`); `launch/hw4_launch.py mode:=fast|safe` plans at launch
   into `<workspace>/hw4_logs/<mode>_<date>/` with `config/hw4.yaml` node params.
+- **HW4 extra credit, SLAM-mapped obstacle** (`test/test_hw4_slam.py`): `launch/hw4_slam_launch.py
+  mode:=fast|safe [prior_landmarks:=none|walls]` with `config/hw4_world_slam.yaml` (its
+  `obstacles` and box tags are ground truth for sim/eval only; the robot gets `slam.prior`) and
+  `config/hw4_slam.yaml`. `velocity_control` with `slam_plan_mode` runs EKF-SLAM from the world
+  start pose; `slam_obstacle.py` estimates the box from mapped box tags (intersection of per-face
+  bounds and the prior, widened by k·sigma + margin) and `SlamPlanner` replans on it.
+  `ros2 run robot_control hw4_slam sim|eval|prior|list` (`hw4_slam_tool.py`). Box tags must be
+  36h11 (one detector): a second apriltag_node got almost no frames on the RubikPi.
 
 ### `robot_vision` (ament_cmake)
 

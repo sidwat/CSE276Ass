@@ -19,6 +19,12 @@ MAP_HEADER = ['label', 'lap', 't', 'tag', 'x', 'y', 'psi', 'cov_xx', 'cov_xy', '
               'var_psi', 'sightings']
 
 
+def sorted_ids(ids):
+    """Landmark ids in order: ints numerically, then family-prefixed string ids."""
+    return sorted(ids, key=lambda t: (isinstance(t, str), t if not isinstance(t, str) else 0,
+                                      str(t)))
+
+
 def fmt(v, digits=4):
     return f'{v:.{digits}f}' if isinstance(v, float) and math.isfinite(v) else str(v)
 
@@ -108,14 +114,17 @@ class SLAMRunLogger:
 
     def snapshot(self, label, lap, t, slam, save_state=False):
         """Log the whole map; with save_state, also the full mu/Sigma as state_<label>.npz."""
-        for tag, (mean, cov, var_psi) in sorted(slam.landmarks().items()):
+        lms = slam.landmarks()
+        for tag in sorted_ids(lms):
+            mean, cov, var_psi = lms[tag]
             self._row('map_snapshots', [
                 label, lap, t, tag, *mean, cov[0, 0], cov[0, 1], cov[1, 1], var_psi,
                 slam.sightings.get(tag, 0)])
         if save_state:
             ids = sorted(slam.index, key=slam.index.get)
+            as_int = all(not isinstance(i, str) for i in ids)
             np.savez(self.path(f'state_{label}.npz'), mu=slam.mu, sigma=slam.sigma,
-                     ids=np.array(ids, dtype=int),
+                     ids=np.array(ids, dtype=int if as_int else str),
                      offsets=np.array([slam.index[i] for i in ids], dtype=int),
                      landmark_dof=slam.dof)
 
@@ -131,7 +140,9 @@ class SLAMRunLogger:
         with open(self.path('map_final.csv'), 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(MAP_HEADER)
-            for tag, (mean, cov, var_psi) in sorted(slam.landmarks().items()):
+            lms = slam.landmarks()
+            for tag in sorted_ids(lms):
+                mean, cov, var_psi = lms[tag]
                 writer.writerow([fmt(v) for v in (
                     'final', -1, t, tag, *mean, cov[0, 0], cov[0, 1], cov[1, 1], var_psi,
                     slam.sightings.get(tag, 0))])
@@ -141,7 +152,7 @@ class SLAMRunLogger:
             'duration_s': round(t, 2),
             'completed_all_waypoints': bool(completed),
             'n_landmarks': slam.n_landmarks,
-            'landmark_ids': sorted(slam.index),
+            'landmark_ids': sorted_ids(slam.index),
             'counts': dict(slam.counts),
             'mean_nis': float(nis.mean()) if len(nis) else None,
             'nis_dof': slam.dof,

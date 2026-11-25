@@ -43,6 +43,7 @@ class World:
     landmarks: dict = field(default_factory=dict)   # id or family:id -> (x, y, yaw)
     planner: dict = field(default_factory=dict)     # raw 'planner' section of the yaml
     source: str = ''
+    slam: dict = field(default_factory=dict)        # raw 'slam' section (extra credit, SLAM)
 
     # --- clearance --------------------------------------------------------------------------
 
@@ -162,7 +163,7 @@ def world_from_dict(data, source=''):
             raise
         raise WorldError(f'{source or "world"}: malformed entry ({e!r})') from e
     world = World(size, boxes, radius, start, goal, landmarks, dict(data.get('planner') or {}),
-                  source)
+                  source, dict(data.get('slam') or {}))
     for name, p in (('start', start), ('goal', goal)):
         if not (0.0 < p[0] < size and 0.0 < p[1] < size):
             raise WorldError(f'{name} ({p[0]}, {p[1]}) is outside the {size} m arena')

@@ -178,6 +178,19 @@ class WaypointController:
                 if dist > g.replan_distance:
                     self.phase = self.ROTATE_TO_TARGET
                     continue
+                if math.isnan(goal_theta):
+                    # A pass-through waypoint within replan_distance has no heading to turn to
+                    # (turning towards nan would spin forever). Creep straight on while it is
+                    # still ahead by more than its pass radius (a sharp bend must not be cut),
+                    # then it counts as passed.
+                    ahead = dx * math.cos(theta) + dy * math.sin(theta)
+                    if ahead > self._pass_radius(goal_x, goal_y, theta):
+                        return clamp(g.k_v * ahead, g.min_v, g.max_v), 0.0, passed
+                    passed = self.index
+                    self.index += 1
+                    self.search_turned = 0.0
+                    self.phase = self.ROTATE_TO_TARGET
+                    continue
                 heading_err = wrap_angle(goal_theta - theta)
                 if abs(heading_err) < g.heading_tolerance:
                     self.phase = self.SETTLE

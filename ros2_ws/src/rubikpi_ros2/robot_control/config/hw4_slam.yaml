@@ -1,0 +1,73 @@
+# Parameters for velocity_control in the HW4 extra-credit SLAM runs, see launch/hw4_slam_launch.py.
+# Motion calibration and controller settings are copied from hw4.yaml (the known-map runs),
+# SLAM settings from hw3.yaml. The world, the obstacle prior and the replanning settings are in
+# config/hw4_world_slam.yaml (world_file, set by the launch file, as is slam_plan_mode).
+velocity_control_node:
+  ros__parameters:
+    speed_per_unit: 1.26
+    wheel_base: 0.68
+    wheel_trim: -0.06
+
+    use_vision: true
+    use_slam: true          # EKF-SLAM: the obstacle tags (and walls) are mapped, not given
+    camera_frame: camera_frame
+    camera_x: 0.1
+    camera_y: 0.0
+    camera_yaw: 0.0
+    camera_upside_down: false
+    max_tag_range: 2.5
+    use_imu: false
+    imu_yaw_sign: 1.0
+    log_period: 0.2         # s between trajectory.csv / obstacle_estimates.csv rows
+    post_run_eval: true     # run `hw4_slam eval` on the run folder when the node exits
+    publish_markers: true   # /slam/landmarks, /slam/pose, /slam/path for foxglove
+    map_frame: slam_map
+
+    # Guard against the ESTIMATED obstacle (the robot does not know the true one)
+    clearance_guard: true
+    guard_gap: -0.02
+    guard_cycles: 6
+
+    pause_at_waypoint: 0.5
+    start_delay: 5.0        # s standing still: the tags in view (box south/east faces from the
+                            # start) are mapped before the first plan is made
+    control_rate: 20.0
+    max_wheel_cmd: 0.5
+    min_wheel_cmd: 0.15
+
+    # --- Controller (hw4.yaml) ---
+    pos_tolerance: 0.03
+    heading_tolerance: 0.1
+    replan_distance: 0.1
+    pass_radius: 0.06
+    settle_time: 1.0
+    search_turn_time: 0.3
+    search_look_time: 1.0
+    search_max_turn: 6.3
+    search_inflate: 0.3     # rad of heading std added on SEARCH (as HW3 SLAM)
+    k_v: 1.26
+    k_w: 1.26
+    max_v: 0.35
+    min_v: 0.25
+    max_w: 1.6
+    min_w: 1.1
+    realign_angle: 0.3
+
+    # --- EKF noise (hw3.yaml / hw4.yaml) ---
+    odom_dist_std: 0.1
+    odom_turn_std: 0.5
+    odom_drift_std: 0.05
+    range_std: 0.02
+    range_std_per_m: 0.03
+    bearing_std: 0.02
+    orientation_std: 0.15
+    gate: 11.34
+
+    # --- SLAM (robot_control/slam.py SLAMParams, as hw3.yaml) ---
+    landmark_dof: 3         # psi is needed to tell which box face a tag is on
+    min_sightings: 3
+    candidate_window: 1.5
+    candidate_spread: 0.15
+    max_incidence: 1.05
+    latency_std: 0.15
+    initial_std: 0.0001     # the start pose is the measured world start: it defines the frame

@@ -127,6 +127,31 @@ class EKFSLAM:
         if stamp is not None:
             self.history.append((stamp, self.mu[:3].copy()))
 
+    def set_pose(self, pose):
+        """Start the robot at a known pose (HW4: the world-frame start), keeping Sigma."""
+        self.mu[:3] = [float(v) for v in pose]
+        self.mu[2] = wrap_angle(self.mu[2])
+
+    def add_known_landmark(self, tag_id, mean, std=(0.02, 0.02, 0.05)):
+        """
+        Add a landmark whose position is already known (a prior map entry).
+
+        It enters the state uncorrelated with the robot, with covariance diag(std^2); later
+        sightings refine it like any mapped landmark. mean is (x, y[, psi]).
+        """
+        d = self.dof
+        m = np.asarray(mean, dtype=float)[:d]
+        if tag_id in self.index:
+            raise ValueError(f'landmark {tag_id} is already in the map')
+        n = len(self.mu)
+        self.index[tag_id] = n
+        self.sightings[tag_id] = 0
+        self.mu = np.concatenate([self.mu, m])
+        sigma = np.zeros((n + d, n + d))
+        sigma[:n, :n] = self.sigma
+        sigma[n:, n:] = np.diag(np.square(np.asarray(std, dtype=float)[:d]))
+        self.sigma = sigma
+
     def inflate(self, std):
         """Add process noise to the robot pose (e.g. when the heading is in doubt)."""
         self.sigma[:3, :3] += np.diag(np.square(std))
