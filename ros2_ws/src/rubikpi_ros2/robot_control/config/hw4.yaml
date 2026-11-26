@@ -1,0 +1,64 @@
+# Parameters for velocity_control in HW4 (path planning with known landmarks), see
+# launch/hw4_launch.py. Landmarks, start pose and obstacles are NOT here: they are in
+# config/hw4_world.yaml (world_file, set by the launch file). Motion calibration and EKF noise are
+# copied from hw3.yaml; re-check speed_per_unit at the start of each session (battery drift).
+velocity_control_node:
+  ros__parameters:
+    speed_per_unit: 1.26
+    wheel_base: 0.68
+    wheel_trim: -0.06
+
+    use_vision: true
+    use_slam: false         # HW4: known map, plain EKF localisation (robot_control/localization.py)
+    camera_frame: camera_frame
+    camera_x: 0.1           # m, camera lens ahead of the point the robot turns about: MEASURE THIS
+    camera_y: 0.0
+    camera_yaw: 0.0
+    camera_upside_down: false
+    max_tag_range: 2.5      # m
+    relocalize_after: 8     # rejected sightings in a row before trusting the tags over odometry
+    use_imu: false
+    imu_yaw_sign: 1.0
+    log_period: 0.5         # s between trajectory.csv rows
+    post_run_eval: true     # run `hw4 eval` on the run folder when the node exits
+
+    # Safety: stop the run if the estimated body overlaps an obstacle by more than 2 cm for
+    # 0.3 s (the estimate is what the robot knows; a stop beats driving into the box)
+    clearance_guard: true
+    guard_gap: -0.02
+    guard_cycles: 6
+
+    pause_at_waypoint: 0.5  # s, after settle_time (not applied at pass-through waypoints)
+    start_delay: 5.0        # s, camera and apriltag_node need a few seconds; first fixes at rest
+    control_rate: 20.0      # Hz
+    max_wheel_cmd: 0.5
+    min_wheel_cmd: 0.15     # motor dead-band
+
+    # --- Controller (HW3 values; keep in sync with planner.timing in hw4_world.yaml) ---
+    pos_tolerance: 0.03
+    heading_tolerance: 0.1
+    replan_distance: 0.1
+    pass_radius: 0.06       # m, pass-through waypoints count inside this radius
+    settle_time: 1.0
+    search_turn_time: 0.3
+    search_look_time: 1.0
+    search_max_turn: 6.3
+    k_v: 1.26
+    k_w: 1.26
+    max_v: 0.35
+    min_v: 0.25
+    max_w: 1.6
+    min_w: 1.1
+    # Tighter than HW2/3 (0.5): the lateral drift before the robot re-turns is about
+    # max_v * realign_angle / k_w = 6 cm here instead of 10 cm, inside the fast plan's margin.
+    realign_angle: 0.3
+
+    # --- EKF noise (robot_control/localization.py NoiseParams) ---
+    odom_dist_std: 0.1
+    odom_turn_std: 0.5
+    odom_drift_std: 0.05
+    range_std: 0.02
+    range_std_per_m: 0.03
+    bearing_std: 0.02
+    orientation_std: 0.15
+    gate: 11.34

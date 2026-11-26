@@ -37,6 +37,7 @@ setup(
             'simulate_slam = robot_control.simulate_slam:main',
             'evaluate_slam = robot_control.evaluate_slam:main',
             'hw3 = robot_control.hw3_tool:main',
+            'hw4 = robot_control.hw4_tool:main',
         ],
     },
 )

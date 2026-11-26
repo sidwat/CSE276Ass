@@ -16,6 +16,7 @@ from robot_control.slam import EKFSLAM, SLAMParams
 from robot_control.slam_logger import SLAMRunLogger
 from robot_control.waypoint_controller import (
     body_to_wheel_cmds, Gains, load_waypoints, WaypointController, wheel_cmds_to_body, wrap_angle)
+from robot_control.world_model import load_world
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray
 from tf2_msgs.msg import TFMessage
@@ -43,6 +44,12 @@ class VelocityControlNode(Node):
     With use_slam:=true as well (HW3), the EKF is EKF-SLAM (robot_control/slam.py): no landmarks
     file is read, each tag enters the state once confirmed, and the map, its covariance and every
     sighting are logged for evaluate_slam (robot_control/slam_logger.py).
+
+    With world_file (HW4, config/hw4_world.yaml) the landmarks and the start pose come from that
+    file: the filter starts at the world-frame start pose, so the (planned) waypoints are in the
+    world frame too. initial_pose overrides the start pose. A waypoint with theta nan is driven
+    through without stopping. With clearance_guard the robot stops if the estimated pose comes
+    within guard_gap of touching an obstacle of the world for guard_cycles control cycles.
     """
 
     def __init__(self):
@@ -80,6 +87,11 @@ class VelocityControlNode(Node):
         self.declare_parameter('start_pose', '')        # 'x,y,theta' world start, for start_pose
         self.declare_parameter('post_run_eval', False)  # run evaluate_slam when the run ends
         self.declare_parameter('gt_file', '')           # ground truth for that evaluation
+        self.declare_parameter('world_file', '')        # HW4: landmarks + start pose (+ guard)
+        self.declare_parameter('initial_pose', '')      # 'x,y,theta' the filter starts at
+        self.declare_parameter('clearance_guard', False)  # stop if the estimate hits the world
+        self.declare_parameter('guard_gap', -0.02)      # m of body gap that trips it (<0: overlap)
+        self.declare_parameter('guard_cycles', 6)       # consecutive cycles before it trips
         defaults = Gains()
         for name, value in vars(defaults).items():
             self.declare_parameter(name, value)
@@ -119,14 +131,25 @@ class VelocityControlNode(Node):
         self.search_inflate = float(self.get_parameter('search_inflate').value)
         self.waypoints_file = path
 
-        # Pose estimate in the start frame, and the body velocity actually being commanded
-        self.x = 0.0
-        self.y = 0.0
-        self.theta = 0.0
+        self.world = None
+        world_file = self.get_parameter('world_file').value
+        if world_file:
+            self.world = load_world(os.path.expanduser(world_file))
+            self.world_file = os.path.expanduser(world_file)
+        self.initial_pose = self.parse_initial_pose()
+        self.clearance_guard = self.world is not None and bool(
+            self.get_parameter('clearance_guard').value)
+        self.guard_gap = float(self.get_parameter('guard_gap').value)
+        self.guard_cycles = int(self.get_parameter('guard_cycles').value)
+        self.guard_count = 0
+
+        # Pose estimate (start frame, or world frame with world_file / initial_pose), and the
+        # body velocity actually being commanded
+        self.x, self.y, self.theta = self.initial_pose
         # Motion model alone (commanded velocities, never corrected), logged for comparison, and
         # the motion model's prediction since the last log line, from the EKF pose at that line
-        self.odom = [0.0, 0.0, 0.0]
-        self.prediction = [0.0, 0.0, 0.0]
+        self.odom = list(self.initial_pose)
+        self.prediction = list(self.initial_pose)
         self.v = 0.0
         self.w = 0.0
 
@@ -170,6 +193,20 @@ class VelocityControlNode(Node):
         if self.use_slam and bool(self.get_parameter('publish_markers').value):
             self.setup_markers()
 
+    def parse_initial_pose(self):
+        text = str(self.get_parameter('initial_pose').value).strip()
+        if text:
+            try:
+                pose = tuple(float(v) for v in text.replace(',', ' ').split())
+                if len(pose) == 3:
+                    return pose
+            except ValueError:
+                pass
+            raise RuntimeError(f'initial_pose {text!r} is not "x,y,theta"')
+        if self.world is not None:
+            return tuple(self.world.start)
+        return (0.0, 0.0, 0.0)
+
     def setup_vision(self, noise_defaults, slam_defaults):
         noise = NoiseParams(
             **{name: float(self.get_parameter(name).value) for name in vars(noise_defaults)})
@@ -180,13 +217,18 @@ class VelocityControlNode(Node):
                                    for name, value in vars(slam_defaults).items()})
             self.ekf = EKFSLAM(noise=noise, params=params)
             self.get_logger().info(f'EKF-SLAM with an empty map: {params}')
+        elif self.world is not None and self.world.landmarks:
+            path = self.world_file
+            self.landmarks = dict(self.world.landmarks)
+            self.landmarks_file = None
+            self.ekf = PoseEKF(*self.initial_pose, noise=noise)
         else:
             path = self.get_parameter('landmarks_file').value
             if not path:
-                raise RuntimeError('landmarks_file parameter is required with use_vision')
+                raise RuntimeError('landmarks_file (or world_file) is required with use_vision')
             self.landmarks = load_landmarks(path)
             self.landmarks_file = path
-            self.ekf = PoseEKF(noise=noise)
+            self.ekf = PoseEKF(*self.initial_pose, noise=noise)
         self.camera_frame = self.get_parameter('camera_frame').value
         self.camera_pose = tuple(float(self.get_parameter(name).value)
                                  for name in ('camera_x', 'camera_y', 'camera_yaw'))
@@ -197,7 +239,8 @@ class VelocityControlNode(Node):
         if self.use_slam:
             return
         self.get_logger().info(f'Localizing with {len(self.landmarks)} landmarks from {path}')
-        for tag_id, (lx, ly, lyaw) in sorted(self.landmarks.items()):
+        for tag_id in sorted(self.landmarks, key=lambda tag: (isinstance(tag, str), tag)):
+            lx, ly, lyaw = self.landmarks[tag_id]
             self.get_logger().info(f'  tag {tag_id}: x={lx:.2f} y={ly:.2f} yaw={lyaw:.2f}')
 
     def setup_slam_logs(self, log_dir, gains, noise_defaults):
@@ -243,8 +286,18 @@ class VelocityControlNode(Node):
         self.create_timer(0.5, self.publish_markers)
 
     def setup_logs(self, log_dir):
-        run_dir = os.path.join(log_dir, time.strftime('run_%Y%m%d_%H%M%S'))
+        run_name = self.get_parameter('run_name').value or time.strftime('run_%Y%m%d_%H%M%S')
+        run_dir = os.path.join(log_dir, run_name)
         os.makedirs(run_dir, exist_ok=True)
+        self.run_dir = run_dir
+        if self.world is not None:
+            shutil.copy(self.world_file, os.path.join(run_dir, 'world.yaml'))
+            with open(os.path.join(run_dir, 'start_pose.txt'), 'w') as f:
+                f.write('# x, y, theta the filter started at (world frame)\n'
+                        + ', '.join(f'{v:.4f}' for v in self.initial_pose) + '\n')
+        if os.path.abspath(self.waypoints_file) != os.path.abspath(
+                os.path.join(run_dir, 'waypoints.txt')):
+            shutil.copy(self.waypoints_file, os.path.join(run_dir, 'waypoints.txt'))
         self.trajectory_file = open(os.path.join(run_dir, 'trajectory.csv'), 'w', newline='')
         self.trajectory_log = csv.writer(self.trajectory_file)
         self.trajectory_log.writerow(
@@ -254,8 +307,13 @@ class VelocityControlNode(Node):
         self.waypoint_log = csv.writer(self.waypoint_file)
         self.waypoint_log.writerow(
             ['index', 't', 'goal_x', 'goal_y', 'goal_theta', 'x', 'y', 'theta'])
+        self.run_info = {'started': time.strftime('%Y-%m-%d %H:%M:%S'),
+                         'waypoints': self.waypoints_file,
+                         'world': getattr(self, 'world_file', ''),
+                         'initial_pose': list(self.initial_pose)}
         if self.ekf is not None:
-            shutil.copy(self.landmarks_file, os.path.join(run_dir, 'landmarks.txt'))
+            if self.landmarks_file:
+                shutil.copy(self.landmarks_file, os.path.join(run_dir, 'landmarks.txt'))
             # Every tag sighting next to what the current estimate predicted, for debugging
             self.measurement_file = open(
                 os.path.join(run_dir, 'measurements.csv'), 'w', newline='')
@@ -279,7 +337,12 @@ class VelocityControlNode(Node):
         for tf in msg.transforms:
             if tf.header.frame_id != self.camera_frame:
                 continue
-            tag_id = parse_tag_id(tf.child_frame_id)
+            frame = tf.child_frame_id
+            if (self.world is not None and not self.use_slam
+                    and ':' in frame and not frame.startswith('36h11:')):
+                tag_id = frame
+            else:
+                tag_id = parse_tag_id(frame)
             if tag_id is None or (not self.use_slam and tag_id not in self.landmarks):
                 continue
             t, q = tf.transform.translation, tf.transform.rotation
@@ -375,6 +438,8 @@ class VelocityControlNode(Node):
             # robot-landmark correlations make a large jump also move the map)
             self.ekf.inflate((0.0, 0.0, self.search_inflate if self.use_slam else 1.0))
         self.last_phase = phase
+        if self.clearance_guard and self.check_clearance():
+            return
         if reached is not None:
             wx, wy, wt = self.controller.waypoints[reached]
             self.get_logger().info(
@@ -387,11 +452,26 @@ class VelocityControlNode(Node):
                 self.waypoint_file.flush()
             if self.slam_log:
                 self.log_slam_waypoint(reached)
-            self.hold_until = now + self.pause_at_waypoint
+            if not self.controller.is_pass_through(reached):
+                self.hold_until = now + self.pause_at_waypoint
         if self.controller.done:
             self.get_logger().info('All waypoints reached')
             self.finished = True
         self.send(v, w)
+
+    def check_clearance(self):
+        """Stop the run if the estimated body overlaps an obstacle for guard_cycles cycles."""
+        gap = self.world.clearance_at(self.x, self.y) - self.world.robot_radius
+        self.guard_count = self.guard_count + 1 if gap < self.guard_gap else 0
+        if self.guard_count < self.guard_cycles:
+            return False
+        d, lab = self.world.clearance(self.x, self.y)
+        self.get_logger().error(
+            f'Clearance guard: estimated pose ({self.x:.2f}, {self.y:.2f}) leaves a body gap of '
+            f'{gap:.3f} m to the {self.world.label_name(int(lab))}; stopping the run')
+        self.finished = True
+        self.send(0.0, 0.0)
+        return True
 
     def log_slam_waypoint(self, reached):
         t, lap = self.slam_log.now(), self.lap_of(reached)
@@ -547,6 +627,9 @@ class VelocityControlNode(Node):
         if self.trajectory_log:
             self.trajectory_file.close()
             self.waypoint_file.close()
+            self.write_run_info()
+            if self.world is not None and bool(self.get_parameter('post_run_eval').value):
+                self.start_post_run_eval(self.run_dir, tool='robot_control.hw4_tool')
         if self.measurement_log:
             self.measurement_file.close()
         if self.slam_log:
@@ -560,13 +643,27 @@ class VelocityControlNode(Node):
             self.slam_log = None
         super().destroy_node()
 
-    def start_post_run_eval(self, run_dir):
+    def write_run_info(self):
+        import json
+        info = dict(getattr(self, 'run_info', {}))
+        info.update({'finished': time.strftime('%Y-%m-%d %H:%M:%S'),
+                     'completed': self.controller.done,
+                     'waypoints_reached': self.controller.index,
+                     'final_pose': [self.x, self.y, self.theta],
+                     'guard_tripped': self.guard_count >= self.guard_cycles})
+        try:
+            with open(os.path.join(self.run_dir, 'run_info.json'), 'w') as f:
+                json.dump(info, f, indent=1)
+        except (OSError, AttributeError):
+            pass
+
+    def start_post_run_eval(self, run_dir, tool='robot_control.hw3_tool'):
         """Post-run hook: evaluate the run in a detached process (survives launch shutdown)."""
         import subprocess
         import sys
-        cmd = [sys.executable, '-m', 'robot_control.hw3_tool', 'eval', run_dir, '--quiet']
+        cmd = [sys.executable, '-m', tool, 'eval', run_dir, '--quiet']
         gt = self.get_parameter('gt_file').value
-        if gt:
+        if gt and tool == 'robot_control.hw3_tool':
             cmd += ['--gt', gt]
         try:
             with open(os.path.join(run_dir, 'eval.log'), 'w') as log:

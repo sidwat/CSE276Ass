@@ -1,0 +1,81 @@
+# HW4 WORLD: every measured input of the path-planning runs lives in this one file.
+#
+# Read by: the planners (hw4 plan / hw4_launch.py), the EKF in velocity_control (landmarks and
+# start pose, via the world_file parameter) and hw4 sim / hw4 eval. Edit it after measuring the
+# arena; nothing else needs to change.
+#
+# World frame (same as HW3's landmarks_hw3_gt.txt): origin at the south-west arena corner,
+# x east, y north, metres, radians, yaw counter-clockwise from +x.
+# 1 ft = 0.3048 m.
+
+arena:
+  size: 3              # m, side of the square arena (10 ft)
+
+# Axis-aligned boxes. HW4 asks for one 1x1 to 2x2 ft box in the middle; more boxes also work.
+obstacles:
+  - center: [1.44, 1.60] # m, middle of the arena
+    size: [0.61, 0.61] # m, 2 ft x 2 ft (1.5 ft = 0.4572, 1 ft = 0.3048)
+
+robot:
+  # Distance from the point the robot turns about (midpoint of the wheel axle, the point the EKF
+  # tracks) to the farthest point of the chassis. MEASURE THIS: it sets how close every plan
+  # gets to the box and the walls.
+  radius: 0.13
+
+# Start and goal on the arena diagonal (x + y = size), as in the HW4 figure: start near the
+# south-east corner, goal near the north-west corner, both 1.5 ft from the two walls.
+# theta of the start: the heading the robot is placed with (north sees wall tag 7).
+# theta of the goal: final heading; facing the arena centre lets the box tags confirm it.
+# Use null to keep the heading the robot arrives with.
+start: [2.35, 0.65, 2.3562]
+goal: [0.70, 2.35, 3.1416]
+
+# AprilTag landmarks (0.173 m). The default family is 36h11.
+# x, y = tag centre; yaw = the direction its printed face points (into the arena).
+# Mount every tag upright with its centre at camera height.
+landmarks:
+  # Wall tags: measured HW3 setup, 2026-11-12 (config/landmarks_hw3_gt.txt), two per wall
+  - {id: 0, x: 3.05, y: 0.96, yaw: 3.1416}     # east wall, south
+  - {id: 7, x: 3.01, y: 2.03, yaw: 3.1416}     # east wall, north
+  - {id: 1, x: 2.00, y: 3.04, yaw: -1.5708}    # north wall, east
+  - {id: 3, x: 0.96, y: 3.04, yaw: -1.5708}    # north wall, west
+  - {id: 4, x: -0.04, y: 2.04, yaw: 0.0}       # west wall, north
+  - {id: 8, x: 0.04, y: 0.96, yaw: 0.0}        # west wall, south
+  - {id: 9, x: 0.97, y: -0.04, yaw: 1.5708}    # south wall, west
+  - {id: 5, x: 1.98, y: -0.04, yaw: 1.5708}    # south wall, east
+  # Box tags face outward.
+  - {id: 1, family: Standard41h12, x: 1.12, y: 1.60, yaw: 3.1416}  # west face
+  - {id: 2, family: Standard41h12, x: 1.44, y: 1.92, yaw: 1.5708}  # north face
+  - {id: 3, family: Standard41h12, x: 1.75, y: 1.60, yaw: 0.0}     # east face
+
+planner:
+  # Robot motion used to estimate travel time (match config/hw4.yaml: max_v, min_w..max_w,
+  # settle_time + pause_at_waypoint)
+  timing:
+    v: 0.25                # m/s cruise speed
+    w: 1.3                 # rad/s typical turn-in-place rate
+    t_stop: 1.5            # s at a waypoint that settles (settle_time + pause_at_waypoint)
+    t_pass: 0.3            # s lost slowing and turning at a pass-through waypoint
+  # Intermediate waypoints are written with theta = nan: the robot drives through them
+  # without turning to a heading, settling or pausing. Only the goal settles.
+  pass_through: true
+
+  # Minimum time / distance: visibility graph in configuration space + A*
+  fast:
+    margin: 0.08           # m of clearance kept beyond the robot radius (EKF + tracking error)
+    corner_segments: 2     # rounded box corners -> circumscribed polygon with this many sides
+    turn_cost: true        # A* cost = travel time incl. turning, not just length
+    merge_corners: true    # replace runs of corner vertices by one waypoint if it stays free
+    max_merge_extra: 0.10  # m of extra length a corner merge may add
+
+  # Maximum safety: clearance grid (brushfire) -> generalized Voronoi diagram + Dijkstra
+  safe:
+    resolution: 0.02       # m grid cell
+    min_clearance: 0.25    # m, GVD cells closer than this to an obstacle are not used
+    simplify_tolerance: 0.03  # m, Ramer-Douglas-Peucker tolerance (clearance loss bound)
+
+  # Optional third plan for the report: grid A* with cost ds * (1 + alpha / clearance)
+  weighted:
+    resolution: 0.04
+    alpha: 0.3
+    simplify_tolerance: 0.03
